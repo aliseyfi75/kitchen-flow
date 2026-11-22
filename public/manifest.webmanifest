@@ -1,0 +1,16 @@
+{
+  "name": "KitchenFlow",
+  "short_name": "KitchenFlow",
+  "description": "Smart household food inventory, portion tracker, store-aware shopping planner, and protein-focused meal planner.",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#FAF9F6",
+  "theme_color": "#0F766E",
+  "icons": [
+    {
+      "src": "./icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

@@ -1,13 +1,21 @@
-# PantryPilot
+# KitchenFlow
 
-Smart household food inventory, portion tracking, consumption forecasting, store-aware shopping planner, and nutrition/protein-focused meal planner — built for shared household use.
+Smart household food inventory, portion tracker, consumption forecaster, store-aware weekend shopping planner, and protein-focused hybrid meal planner — built for shared 2-person household use with full English & Persian bilingual support.
 
-## Core Vision
-- **Inventory & Portion Tracking**: Track what you buy, how you portion and store it (freezer, fridge, pantry), and deduct portions with one tap.
-- **Consumption Learning & Projections**: Automatically learn how fast staples run out and predict whether to buy on this trip or next week.
-- **Store-Aware Smart Shopping List**: Learn which items come from which stores (e.g., Costco, Superstore, local markets) and plan weekend shopping runs by store.
-- **Shared Household Sync**: Real-time shared access for multiple household members.
-- **Weekly Meal & Nutrition Planner**: Suggest low-effort, high-protein, nutritionally balanced meals using what is actually in your kitchen right now.
+## Features (Phase 1 Prototype)
+- **Kitchen Inventory & Portioning**: Track Freezer, Fridge, and Pantry items with bilingual primary names + secondary aliases (e.g., `Chicken Breast` / `سینه مرغ`), 1-tap `-1 Portion`, quick level bar for continuous items, and 1-tap `Finished → Add to Shopping List`.
+- **EMA Consumption Learning & Weekend Forecasting**: Learns household consumption velocity from real usage events and projects whether each staple is **Buy This Weekend**, **Borderline**, or **Good Until Next Week**.
+- **Store-Aware Weekend Shopping Planner**: Automatically learns store affinity (Costco, Superstore, Persian Market, etc.), summarizes which stores you need to visit this weekend, and supports 1-tap **Complete Trip → Restock & Portion**.
+- **Hybrid Meal & Protein-Max Planner**: Selectable cooking tools (Air Fryer, Oven, Pan/Stovetop defaults + extras), selectable inventory ingredients (prioritize / exclude), daily protein target, effort level, personal favorite meals library, and Gemini AI edge-function integration architecture.
+- **Bilingual EN / FA Support**: First-class mixed-language rendering (`dir="auto"`, Inter + Vazirmatn) plus optional instant EN/FA UI toggle.
 
-## Status
-Planning & prototyping phase.
+## Local Development
+```bash
+npm install
+npm run dev
+```
+
+## Build
+```bash
+npm run build
+```
