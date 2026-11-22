@@ -25,6 +25,7 @@ interface SettingsViewProps {
     patch: { avgDaysPerFullPack?: number; dailyBurnRate?: number; storeId?: string }
   ) => void;
   onAddStore: (store: Omit<Store, 'id'>) => void;
+  onUpdateStore: (storeId: string, patch: Partial<Omit<Store, 'id'>>) => void;
   onDeleteStore: (storeId: string) => void;
   onResetDemo: () => void;
   onOpenLoginPreview: () => void;
@@ -168,6 +169,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   onUpdateSettings,
   onUpdateItemLearning,
   onAddStore,
+  onUpdateStore,
   onDeleteStore,
   onResetDemo,
   onOpenLoginPreview,
@@ -176,6 +178,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [storeName, setStoreName] = useState('');
   const [storeAlias, setStoreAlias] = useState('');
   const [storeColor, setStoreColor] = useState(STORE_COLORS[0]);
+  const [editingColorStoreId, setEditingColorStoreId] = useState<string | null>(null);
   const [rhythmSearch, setRhythmSearch] = useState('');
 
   const filteredRhythmItems = useMemo(() => {
@@ -368,36 +371,83 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-          {stores.map((st) => (
-            <div
-              key={st.id}
-              className="rounded-2xl border border-stone-200 p-3 flex items-center justify-between gap-2"
-            >
-              <div className="flex items-center gap-2.5 min-w-0">
-                <span
-                  className="w-3.5 h-3.5 rounded-full shrink-0"
-                  style={{ backgroundColor: st.color }}
-                />
-                <div className="min-w-0">
-                  <div className="font-semibold text-sm text-stone-900 truncate">{st.name}</div>
-                  {st.alias && (
-                    <div dir="auto" className="text-xs text-stone-500 truncate">
-                      {st.alias}
+          {stores.map((st) => {
+            const picking = editingColorStoreId === st.id;
+            return (
+              <div
+                key={st.id}
+                className="rounded-2xl border border-stone-200 p-3 space-y-2.5"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setEditingColorStoreId(picking ? null : st.id)
+                      }
+                      className="w-5 h-5 rounded-full shrink-0 ring-2 ring-offset-2 ring-stone-200 hover:ring-stone-400 transition cursor-pointer"
+                      style={{ backgroundColor: st.color }}
+                      title="Click to change store color"
+                      aria-label={`Change color for ${st.name}`}
+                    />
+                    <div className="min-w-0">
+                      <div className="font-semibold text-sm text-stone-900 truncate">{st.name}</div>
+                      {st.alias && (
+                        <div dir="auto" className="text-xs text-stone-500 truncate">
+                          {st.alias}
+                        </div>
+                      )}
                     </div>
+                  </div>
+                  {stores.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => onDeleteStore(st.id)}
+                      className="p-1.5 rounded-lg text-stone-400 hover:text-rose-600 hover:bg-rose-50"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
                   )}
                 </div>
+
+                {picking && (
+                  <div className="flex items-center justify-between gap-1.5 pt-2 border-t border-stone-100">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      {STORE_COLORS.map((c) => (
+                        <button
+                          key={c}
+                          type="button"
+                          onClick={() => {
+                            onUpdateStore(st.id, { color: c });
+                            setEditingColorStoreId(null);
+                          }}
+                          className={`w-5 h-5 rounded-full border-2 transition ${
+                            st.color.toLowerCase() === c.toLowerCase()
+                              ? 'border-stone-900 scale-110'
+                              : 'border-transparent hover:scale-110'
+                          }`}
+                          style={{ backgroundColor: c }}
+                          aria-label={`Set ${st.name} color to ${c}`}
+                        />
+                      ))}
+                    </div>
+                    <label
+                      className="text-[10px] font-semibold text-stone-500 hover:text-stone-800 inline-flex items-center gap-1 cursor-pointer shrink-0"
+                      title="Pick any custom color"
+                    >
+                      <span>Custom</span>
+                      <input
+                        type="color"
+                        value={st.color}
+                        onChange={(e) => onUpdateStore(st.id, { color: e.target.value })}
+                        className="w-5 h-5 rounded cursor-pointer border-0 bg-transparent p-0"
+                      />
+                    </label>
+                  </div>
+                )}
               </div>
-              {stores.length > 1 && (
-                <button
-                  type="button"
-                  onClick={() => onDeleteStore(st.id)}
-                  className="p-1.5 rounded-lg text-stone-400 hover:text-rose-600 hover:bg-rose-50"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
-              )}
-            </div>
-          ))}
+            );
+          })}
         </div>
 
         <form onSubmit={handleAddStore} className="flex flex-col sm:flex-row gap-2 pt-1">

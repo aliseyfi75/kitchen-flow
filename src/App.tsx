@@ -238,6 +238,7 @@ export function App() {
             onUpdateSettings={store.updateSettings}
             onUpdateItemLearning={store.updateItemLearning}
             onAddStore={store.addStore}
+            onUpdateStore={store.updateStore}
             onDeleteStore={store.deleteStore}
             onResetDemo={store.resetDemo}
             onOpenLoginPreview={() => setShowLoginPreview(true)}

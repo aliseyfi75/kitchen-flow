@@ -618,6 +618,13 @@ export function useKitchenStore() {
     [notify]
   );
 
+  const updateStore = useCallback((storeId: string, patch: Partial<Omit<Store, 'id'>>) => {
+    setState((prev) => ({
+      ...prev,
+      stores: prev.stores.map((s) => (s.id === storeId ? { ...s, ...patch } : s)),
+    }));
+  }, []);
+
   const deleteStore = useCallback(
     (storeId: string) => {
       setState((prev) => {
@@ -932,6 +939,7 @@ export function useKitchenStore() {
     completeShoppingTrip,
     applyReceiptItems,
     addStore,
+    updateStore,
     deleteStore,
     addRecipe: addRecipeWithNewIngredients,
     addCuisine,
