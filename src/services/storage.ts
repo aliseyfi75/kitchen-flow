@@ -1,7 +1,7 @@
 import { KitchenState } from '../types/kitchen';
 import { createSeedState } from '../data/seedData';
 
-const STORAGE_KEY = 'kitchenflow_state_v2';
+const STORAGE_KEY = 'kitchenflow_state_v3';
 
 /**
  * Repository abstraction so Phase 2 can swap LocalStorageKitchenRepository

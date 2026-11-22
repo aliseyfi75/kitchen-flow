@@ -42,7 +42,8 @@ export function useKitchenStore() {
     shoppingList: ShoppingItem[],
     item: InventoryItem,
     reason: ShoppingReason,
-    priority: 'essential' | 'optional' = 'essential'
+    priority: 'essential' | 'optional' = 'essential',
+    note?: string
   ): { list: ShoppingItem[]; added: boolean } => {
     const existing = shoppingList.find((s) => s.inventoryItemId === item.id);
     if (existing) {
@@ -50,7 +51,12 @@ export function useKitchenStore() {
         added: false,
         list: shoppingList.map((s) =>
           s.id === existing.id
-            ? { ...s, priority: priority === 'essential' ? 'essential' : s.priority, checked: false }
+            ? {
+                ...s,
+                priority: priority === 'essential' ? 'essential' : s.priority,
+                note: note ?? s.note,
+                checked: false,
+              }
             : s
         ),
       };
@@ -68,6 +74,7 @@ export function useKitchenStore() {
       targetZone: item.zone,
       priority,
       reason,
+      note,
       checked: false,
       addedAt: new Date().toISOString(),
     };
@@ -340,30 +347,84 @@ export function useKitchenStore() {
   );
 
   const syncForecastToShoppingList = useCallback(() => {
+    const curr = stateRef.current;
     let addedCount = 0;
+    for (const item of curr.items) {
+      const fc = computeItemForecast(item, curr.settings.shoppingDay);
+      const needsThisTrip =
+        fc.verdict === 'out' ||
+        fc.verdict === 'buy_this_weekend' ||
+        fc.verdict === 'runs_out_next_week';
+      const alreadyListed = curr.shoppingList.some((s) => s.inventoryItemId === item.id);
+      if (needsThisTrip && !alreadyListed) addedCount += 1;
+    }
+
     setState((prev) => {
       let nextList = [...prev.shoppingList];
       for (const item of prev.items) {
         const fc = computeItemForecast(item, prev.settings.shoppingDay);
-        if (fc.verdict === 'out' || fc.verdict === 'buy_this_weekend') {
+        if (
+          fc.verdict === 'out' ||
+          fc.verdict === 'buy_this_weekend' ||
+          fc.verdict === 'runs_out_next_week'
+        ) {
+          const reason: ShoppingReason =
+            fc.verdict === 'out'
+              ? 'finished'
+              : fc.verdict === 'runs_out_next_week'
+              ? 'forecast_midweek'
+              : 'forecast_weekend';
           const res = ensureOnShoppingList(
             nextList,
             item,
-            fc.verdict === 'out' ? 'finished' : 'forecast_weekend',
-            'essential'
+            reason,
+            'essential',
+            fc.forecastDescription
           );
           nextList = res.list;
-          if (res.added) addedCount += 1;
         }
       }
       return { ...prev, shoppingList: nextList };
     });
+
     if (addedCount > 0) {
-      notify(`Added ${addedCount} projected item(s) to this weekend's list`, 'teal');
+      notify(
+        `Added ${addedCount} projected item(s) (including mid-week run-outs) to this weekend's list`,
+        'teal'
+      );
     } else {
-      notify('Shopping list is already synced with your weekend forecast!', 'teal');
+      notify('Shopping list is already synced with your weekend & next-week forecast!', 'teal');
     }
   }, [notify]);
+
+  const addKitchenItemToShoppingManually = useCallback(
+    (itemId: string) => {
+      const curr = stateRef.current;
+      const item = curr.items.find((i) => i.id === itemId);
+      if (!item) return;
+      const storeName =
+        curr.stores.find((s) => s.id === getLearnedStoreId(item))?.name ?? 'Shopping List';
+      const note =
+        item.remainingPortions > 0
+          ? `Added manually — currently have ${item.remainingPortions}/${item.totalPortions} left`
+          : 'Added manually (out of stock)';
+
+      setState((prev) => {
+        const target = prev.items.find((i) => i.id === itemId);
+        if (!target) return prev;
+        const res = ensureOnShoppingList(
+          prev.shoppingList,
+          target,
+          'manual_from_kitchen',
+          'essential',
+          note
+        );
+        return { ...prev, shoppingList: res.list };
+      });
+      notify(`Added ${item.name} manually to ${storeName} (stock noted)`, 'teal');
+    },
+    [notify]
+  );
 
   const addShoppingItem = useCallback(
     (entry: Omit<ShoppingItem, 'id' | 'addedAt' | 'checked'>) => {
@@ -521,13 +582,97 @@ export function useKitchenStore() {
     [notify]
   );
 
-  const addRecipe = useCallback(
-    (recipe: Omit<MealRecipe, 'id'>) => {
-      setState((prev) => ({
-        ...prev,
-        recipes: [{ ...recipe, id: `rec-${Date.now()}` }, ...prev.recipes],
-      }));
-      notify(`Saved "${recipe.name}" to your favorites library`, 'teal');
+  const addRecipeWithNewIngredients = useCallback(
+    (recipe: Omit<MealRecipe, 'id'>, newInventoryItems: InventoryItem[] = []) => {
+      setState((prev) => {
+        const existingCuisines = prev.settings.cuisines || [];
+        const hasCuisine = existingCuisines.some(
+          (c) => c.toLowerCase() === recipe.cuisine.toLowerCase()
+        );
+        return {
+          ...prev,
+          items: newInventoryItems.length > 0 ? [...newInventoryItems, ...prev.items] : prev.items,
+          recipes: [{ ...recipe, id: `rec-${Date.now()}` }, ...prev.recipes],
+          settings: hasCuisine
+            ? prev.settings
+            : { ...prev.settings, cuisines: [...existingCuisines, recipe.cuisine] },
+        };
+      });
+      notify(
+        newInventoryItems.length > 0
+          ? `Saved "${recipe.name}" & added ${newInventoryItems.length} new ingredient(s) to Kitchen!`
+          : `Saved "${recipe.name}" to your food library`,
+        'teal'
+      );
+    },
+    [notify]
+  );
+
+  const addCuisine = useCallback(
+    (cuisineName: string) => {
+      const clean = cuisineName.trim();
+      if (!clean) return;
+      setState((prev) => {
+        const existing = prev.settings.cuisines || [];
+        if (existing.some((c) => c.toLowerCase() === clean.toLowerCase())) return prev;
+        return {
+          ...prev,
+          settings: { ...prev.settings, cuisines: [...existing, clean] },
+        };
+      });
+      notify(`Added cuisine: ${clean}`, 'teal');
+    },
+    [notify]
+  );
+
+  const cookRecipeDirect = useCallback(
+    (recipeId: string, servings: number) => {
+      const curr = stateRef.current;
+      const recipe = curr.recipes.find((r) => r.id === recipeId);
+      if (!recipe) return;
+      const mult = Math.max(1, servings);
+
+      setState((prev) => {
+        const rec = prev.recipes.find((r) => r.id === recipeId);
+        if (!rec) return prev;
+        const nowIso = new Date().toISOString();
+        let nextShopping = prev.shoppingList;
+        const newEvents = [...prev.events];
+
+        const nextItems = prev.items.map((item) => {
+          const ing = rec.ingredients.find((x) => x.itemId === item.id);
+          if (!ing) return item;
+          const deducted = Number((ing.portionsNeeded * mult).toFixed(2));
+          const nextRem = Math.max(0, Number((item.remainingPortions - deducted).toFixed(2)));
+          newEvents.unshift({
+            id: `ev-${Date.now()}-${item.id}`,
+            itemId: item.id,
+            type: nextRem === 0 ? 'finished' : 'use_portion',
+            deltaPortions: -deducted,
+            timestamp: nowIso,
+            actor: prev.settings.activeUser,
+          });
+          if (nextRem === 0 && item.autoAddOnEmpty) {
+            nextShopping = ensureOnShoppingList(
+              nextShopping,
+              item,
+              'finished',
+              'essential',
+              'Ran out while cooking'
+            ).list;
+          }
+          return { ...item, remainingPortions: nextRem, lastUsedAt: nowIso };
+        });
+
+        return {
+          ...prev,
+          items: nextItems,
+          shoppingList: nextShopping,
+          events: newEvents.slice(0, 200),
+        };
+      });
+
+      notify(`Cooked "${recipe.name}" (${mult}×) & deducted exact ingredients from Kitchen!`, 'teal');
     },
     [notify]
   );
@@ -721,6 +866,7 @@ export function useKitchenStore() {
     saveItem,
     deleteItem,
     syncForecastToShoppingList,
+    addKitchenItemToShoppingManually,
     addShoppingItem,
     toggleShoppingChecked,
     updateShoppingItem,
@@ -729,7 +875,9 @@ export function useKitchenStore() {
     applyReceiptItems,
     addStore,
     deleteStore,
-    addRecipe,
+    addRecipe: addRecipeWithNewIngredients,
+    addCuisine,
+    cookRecipeDirect,
     toggleFavoriteRecipe,
     setWeeklyPlan,
     updatePlannedMealServings,

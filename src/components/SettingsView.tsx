@@ -137,19 +137,39 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
           <div className="rounded-2xl bg-stone-50 border border-stone-200/80 p-3">
             <label className="block text-[11px] font-semibold text-stone-500 mb-1.5">
-              Usual Shopping Day
+              Shopping Day &amp; Radar Horizon
             </label>
-            <select
-              value={settings.shoppingDay}
-              onChange={(e) => onUpdateSettings({ shoppingDay: Number(e.target.value) })}
-              className="w-full rounded-lg border border-stone-200 bg-white px-2.5 py-1.5 text-xs font-semibold"
-            >
-              {[6, 0, 5, 1, 2, 3, 4].map((d) => (
-                <option key={d} value={d}>
-                  {formatShoppingDayName(d, lang)}
-                </option>
-              ))}
-            </select>
+            <div className="grid grid-cols-2 gap-1.5">
+              <select
+                value={settings.shoppingDay}
+                onChange={(e) => onUpdateSettings({ shoppingDay: Number(e.target.value) })}
+                className="w-full rounded-lg border border-stone-200 bg-white px-2 py-1.5 text-xs font-semibold"
+              >
+                {[6, 0, 5, 1, 2, 3, 4].map((d) => (
+                  <option key={d} value={d}>
+                    {formatShoppingDayName(d, lang)}
+                  </option>
+                ))}
+              </select>
+              <div className="relative">
+                <input
+                  type="number"
+                  min={3}
+                  max={30}
+                  value={settings.forecastHorizonDays}
+                  onChange={(e) =>
+                    onUpdateSettings({
+                      forecastHorizonDays: Math.max(3, Math.min(30, Number(e.target.value) || 10)),
+                    })
+                  }
+                  title="Consumption Forecast Radar horizon (days)"
+                  className="w-full rounded-lg border border-stone-200 bg-white px-2 pr-7 py-1.5 text-xs font-bold text-amber-800"
+                />
+                <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-semibold text-stone-400">
+                  d
+                </span>
+              </div>
+            </div>
           </div>
 
           <div className="rounded-2xl bg-stone-50 border border-stone-200/80 p-3">

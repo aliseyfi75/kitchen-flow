@@ -165,6 +165,7 @@ export function App() {
           <KitchenView
             items={state.items}
             stores={state.stores}
+            shoppingList={state.shoppingList}
             shoppingDay={state.settings.shoppingDay}
             lang={lang}
             uiMode={uiMode}
@@ -180,6 +181,7 @@ export function App() {
             onSetLevel={store.setContinuousLevel}
             onMarkFinished={store.markFinished}
             onQuickRestock={store.quickRestock}
+            onAddToShoppingManually={store.addKitchenItemToShoppingManually}
             onSaveItem={store.saveItem}
             onDeleteItem={store.deleteItem}
             onOpenReceiptScanner={() => setShowReceiptScanner(true)}
@@ -192,10 +194,10 @@ export function App() {
             stores={state.stores}
             shoppingList={state.shoppingList}
             shoppingDay={state.settings.shoppingDay}
+            forecastHorizonDays={state.settings.forecastHorizonDays}
             lang={lang}
             uiMode={uiMode}
             onSyncForecast={store.syncForecastToShoppingList}
-            onOpenReceiptScanner={() => setShowReceiptScanner(true)}
             onAddShoppingItem={store.addShoppingItem}
             onToggleChecked={store.toggleShoppingChecked}
             onUpdateShoppingItem={store.updateShoppingItem}
@@ -207,8 +209,10 @@ export function App() {
         {activeTab === 'meals' && (
           <MealPlannerView
             items={state.items}
+            stores={state.stores}
             recipes={state.recipes}
             weeklyPlan={state.weeklyPlan}
+            cuisines={state.settings.cuisines}
             defaultTools={state.settings.defaultTools}
             dailyProteinTarget={state.settings.dailyProteinTarget}
             dailySugarLimit={state.settings.dailySugarLimit}
@@ -218,7 +222,9 @@ export function App() {
             onSetWeeklyPlan={store.setWeeklyPlan}
             onUpdateMealServings={store.updatePlannedMealServings}
             onMarkMealCooked={store.markMealCooked}
+            onCookRecipeDirect={store.cookRecipeDirect}
             onAddRecipe={store.addRecipe}
+            onAddCuisine={store.addCuisine}
             onToggleFavorite={store.toggleFavoriteRecipe}
             onAddMissingToShopping={store.addShoppingItem}
           />

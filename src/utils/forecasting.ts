@@ -1,6 +1,7 @@
 import { ForecastVerdict, InventoryItem, ItemForecast } from '../types/kitchen';
 
 const DAY_MS = 1000 * 60 * 60 * 24;
+const SHORT_DAYS_EN = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 /**
  * Returns how many days remain until the upcoming shopping day (e.g. Saturday = 6).
@@ -8,8 +9,7 @@ const DAY_MS = 1000 * 60 * 60 * 24;
  */
 export function getDaysUntilNextShopping(shoppingDay: number, now = new Date()): number {
   const today = now.getDay();
-  const diff = (shoppingDay - today + 7) % 7;
-  return diff;
+  return (shoppingDay - today + 7) % 7;
 }
 
 /**
@@ -28,7 +28,7 @@ export function getLearnedStoreId(item: InventoryItem): string {
 }
 
 /**
- * Computes live consumption forecast, freshness status, and weekend buy verdict.
+ * Computes live consumption forecast, freshness status, and weekend / mid-week run-out verdict.
  */
 export function computeItemForecast(
   item: InventoryItem,
@@ -36,36 +36,53 @@ export function computeItemForecast(
   now = new Date()
 ): ItemForecast {
   const safeTotal = Math.max(item.totalPortions, 0.1);
-  const stockPercent = Math.max(0, Math.min(100, Math.round((item.remainingPortions / safeTotal) * 100)));
+  const stockPercent = Math.max(
+    0,
+    Math.min(100, Math.round((item.remainingPortions / safeTotal) * 100))
+  );
 
   const avgDays = Math.max(item.avgDaysPerFullPack, 1);
-  const dailyBurnRate = safeTotal / avgDays; // portions per day
+  const dailyBurnRate = safeTotal / avgDays;
   const estimatedDaysLeft =
     item.remainingPortions <= 0
       ? 0
       : Number((item.remainingPortions / Math.max(dailyBurnRate, 0.05)).toFixed(1));
 
   const daysUntilNextShopping = getDaysUntilNextShopping(shoppingDay, now);
-  // Following shopping trip is 7 days after the upcoming weekend trip
   const daysUntilFollowingShopping = daysUntilNextShopping + 7;
 
+  const runOutDate = new Date(now.getTime() + Math.round(estimatedDaysLeft) * DAY_MS);
+  const runOutDayLabel = SHORT_DAYS_EN[runOutDate.getDay()];
+
   let verdict: ForecastVerdict;
+  let forecastDescription: string;
+
   if (item.remainingPortions <= 0) {
     verdict = 'out';
-  } else if (estimatedDaysLeft <= daysUntilFollowingShopping - 1.5) {
-    // Will run out before next week's shopping trip -> buy this weekend!
+    forecastDescription = 'Out of stock right now';
+  } else if (estimatedDaysLeft <= Math.max(daysUntilNextShopping + 0.5, 1.5)) {
     verdict = 'buy_this_weekend';
+    forecastDescription = `Runs out by this weekend (~${estimatedDaysLeft}d left, ~${runOutDayLabel})`;
+  } else if (estimatedDaysLeft <= daysUntilFollowingShopping) {
+    // Will survive past THIS weekend's trip, but projected to finish mid-week NEXT week!
+    verdict = 'runs_out_next_week';
+    forecastDescription = `Will last past this weekend, but projected to run out mid-week next week (~${runOutDayLabel}, ~${estimatedDaysLeft}d left)`;
   } else if (estimatedDaysLeft <= daysUntilFollowingShopping + 2) {
-    // Tight buffer around next weekend -> borderline
     verdict = 'borderline';
+    forecastDescription = `Borderline for following weekend (~${estimatedDaysLeft}d left)`;
   } else {
     verdict = 'good_until_next_week';
+    forecastDescription = `Enough until next week (~${estimatedDaysLeft}d left)`;
   }
 
   let stockState: 'good' | 'low' | 'critical' = 'good';
   if (item.remainingPortions <= 0 || stockPercent <= 15) {
     stockState = 'critical';
-  } else if (stockPercent <= 38 || verdict === 'buy_this_weekend') {
+  } else if (
+    stockPercent <= 38 ||
+    verdict === 'buy_this_weekend' ||
+    verdict === 'runs_out_next_week'
+  ) {
     stockState = 'low';
   }
 
@@ -84,6 +101,8 @@ export function computeItemForecast(
     daysUntilNextShopping,
     daysUntilFollowingShopping,
     verdict,
+    runOutDayLabel,
+    forecastDescription,
     daysUntilExpiry,
     expiringSoon,
     learnedStoreId: getLearnedStoreId(item),
@@ -93,7 +112,6 @@ export function computeItemForecast(
 
 /**
  * Exponential Moving Average (EMA) update when an item finishes a cycle.
- * Blends the observed days-to-finish with prior learned avgDaysPerFullPack.
  */
 export function updateEmaCycleDays(
   previousAvgDays: number,
@@ -104,7 +122,6 @@ export function updateEmaCycleDays(
   const restockMs = new Date(lastRestockedAt).getTime();
   const elapsedDays = (now.getTime() - restockMs) / DAY_MS;
 
-  // Ignore unrealistic cycles (< 0.5 days or > 120 days) so accidental taps don't corrupt learning
   if (!Number.isFinite(elapsedDays) || elapsedDays < 0.5 || elapsedDays > 120) {
     return { avgDaysPerFullPack: previousAvgDays, cycleCount };
   }

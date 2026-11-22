@@ -35,7 +35,7 @@ export interface MicronutrientProfile {
   vitaminDPct?: number; // % DV
   vitaminCPct?: number; // % DV
   omega3?: boolean;
-  highlights?: string[]; // e.g. ['B12', 'Folate', 'Magnesium']
+  highlights?: string[];
 }
 
 export interface NutritionFacts {
@@ -84,7 +84,13 @@ export interface InventoryItem {
   autoAddOnEmpty: boolean;
 }
 
-export type ShoppingReason = 'finished' | 'forecast_weekend' | 'manual' | 'meal_plan';
+export type ShoppingReason =
+  | 'finished'
+  | 'forecast_weekend'
+  | 'forecast_midweek'
+  | 'manual_from_kitchen'
+  | 'manual'
+  | 'meal_plan';
 
 export interface ShoppingItem {
   id: string;
@@ -97,6 +103,7 @@ export interface ShoppingItem {
   targetZone: StorageZone;
   priority: 'essential' | 'optional';
   reason: ShoppingReason;
+  note?: string; // e.g., "Projected to run out mid-week next week (~Wed)" or "Added manually — have 5/8 left"
   checked: boolean;
   addedAt: string;
 }
@@ -116,13 +123,14 @@ export interface RecipeIngredient {
   name: string;
   alias?: string;
   portionsNeeded: number; // per 1 person serving
+  portionLabel?: string;
 }
 
 export interface MealRecipe {
   id: string;
   name: string;
   alias?: string;
-  cuisine: 'persian' | 'western' | 'fusion';
+  cuisine: string; // Flexible so users can add custom cuisines anytime (e.g. 'Persian', 'Western', 'Fusion', 'Mediterranean')
   mealType: 'breakfast' | 'lunch' | 'dinner' | 'snack';
   prepMinutes: number;
   effort: EffortLevel;
@@ -131,8 +139,9 @@ export interface MealRecipe {
   sugarGrams: number;
   fiberGrams: number;
   calories: number;
-  micronutrients: string[]; // e.g., ['Iron', 'Vitamin C', 'Omega-3']
+  micronutrients: string[];
   nutritionHighlight: string;
+  nutritionEstimated?: boolean;
   ingredients: RecipeIngredient[];
   quickSteps: string[];
   isFavorite: boolean;
@@ -172,6 +181,8 @@ export interface HouseholdSettings {
   eatingMode: EatingMode;
   guestCount: number;
   shoppingDay: number; // 0 = Sun, 6 = Sat
+  forecastHorizonDays: number; // Default 10 days for Consumption Forecast Radar
+  cuisines: string[]; // User-extensible list of cuisines
   dailyProteinTarget: number;
   dailySugarLimit: number;
   householdSize: number;
@@ -190,7 +201,12 @@ export interface KitchenState {
   settings: HouseholdSettings;
 }
 
-export type ForecastVerdict = 'out' | 'buy_this_weekend' | 'borderline' | 'good_until_next_week';
+export type ForecastVerdict =
+  | 'out'
+  | 'buy_this_weekend'
+  | 'runs_out_next_week'
+  | 'borderline'
+  | 'good_until_next_week';
 
 export interface ItemForecast {
   stockPercent: number;
@@ -199,6 +215,8 @@ export interface ItemForecast {
   daysUntilNextShopping: number;
   daysUntilFollowingShopping: number;
   verdict: ForecastVerdict;
+  runOutDayLabel: string;
+  forecastDescription: string;
   daysUntilExpiry: number | null;
   expiringSoon: boolean;
   learnedStoreId: string;

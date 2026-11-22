@@ -3,25 +3,28 @@ import {
   AlertTriangle,
   Archive,
   Camera,
+  Check,
   CheckCircle2,
   Clock,
   Edit3,
   Flame,
   Minus,
+  PartyPopper,
   Plus,
   Receipt,
   RefreshCw,
   Search,
+  ShoppingCart,
   Snowflake,
   Thermometer,
   Trash2,
   User,
   Users,
-  PartyPopper,
 } from 'lucide-react';
 import {
   EatingMode,
   InventoryItem,
+  ShoppingItem,
   StorageZone,
   Store,
   UILanguage,
@@ -34,6 +37,7 @@ import { ItemModal } from './ItemModal';
 interface KitchenViewProps {
   items: InventoryItem[];
   stores: Store[];
+  shoppingList: ShoppingItem[];
   shoppingDay: number;
   lang: UILanguage;
   uiMode: UIMode;
@@ -44,6 +48,7 @@ interface KitchenViewProps {
   onSetLevel: (itemId: string, percent: number) => void;
   onMarkFinished: (itemId: string) => void;
   onQuickRestock: (itemId: string) => void;
+  onAddToShoppingManually: (itemId: string) => void;
   onSaveItem: (item: InventoryItem, isNew: boolean) => void;
   onDeleteItem: (itemId: string) => void;
   onOpenReceiptScanner: () => void;
@@ -58,6 +63,7 @@ const ZONE_ICONS: Record<StorageZone, React.ReactNode> = {
 export const KitchenView: React.FC<KitchenViewProps> = ({
   items,
   stores,
+  shoppingList,
   shoppingDay,
   lang,
   uiMode,
@@ -68,12 +74,12 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
   onSetLevel,
   onMarkFinished,
   onQuickRestock,
+  onAddToShoppingManually,
   onSaveItem,
   onDeleteItem,
   onOpenReceiptScanner,
 }) => {
   const [zoneFilter, setZoneFilter] = useState<'all' | StorageZone>('all');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'attention' | 'expiring'>('all');
   const [search, setSearch] = useState('');
   const [modalState, setModalState] = useState<{
     item: InventoryItem | null;
@@ -85,6 +91,10 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
     eatingMode === 'solo' ? 1 : eatingMode === 'together' ? 2 : Math.max(3, guestCount);
 
   const storeMap = useMemo(() => new Map(stores.map((s) => [s.id, s])), [stores]);
+  const shoppingItemIds = useMemo(
+    () => new Set(shoppingList.map((s) => s.inventoryItemId).filter(Boolean)),
+    [shoppingList]
+  );
 
   const enriched = useMemo(() => {
     return items.map((item) => ({
@@ -93,28 +103,11 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
     }));
   }, [items, shoppingDay]);
 
-  const stats = useMemo(() => {
-    let buyThisWeekend = 0;
-    let expiringSoon = 0;
-    let outCount = 0;
-    for (const { forecast } of enriched) {
-      if (forecast.verdict === 'out') outCount += 1;
-      if (forecast.verdict === 'out' || forecast.verdict === 'buy_this_weekend') buyThisWeekend += 1;
-      if (forecast.expiringSoon) expiringSoon += 1;
-    }
-    return { total: items.length, buyThisWeekend, expiringSoon, outCount };
-  }, [enriched, items.length]);
-
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return enriched
       .filter(({ item, forecast }) => {
         if (zoneFilter !== 'all' && item.zone !== zoneFilter) return false;
-        if (statusFilter === 'attention') {
-          if (forecast.verdict !== 'out' && forecast.verdict !== 'buy_this_weekend') return false;
-        }
-        if (statusFilter === 'expiring' && !forecast.expiringSoon) return false;
-
         if (q) {
           const store = storeMap.get(forecast.learnedStoreId);
           const hay = [
@@ -135,8 +128,9 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
           if (v === 'out') return 0;
           if (exp) return 1;
           if (v === 'buy_this_weekend') return 2;
-          if (v === 'borderline') return 3;
-          return 4;
+          if (v === 'runs_out_next_week') return 3;
+          if (v === 'borderline') return 4;
+          return 5;
         };
         const diff =
           priority(a.forecast.verdict, a.forecast.expiringSoon) -
@@ -144,11 +138,11 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
         if (diff !== 0) return diff;
         return a.forecast.estimatedDaysLeft - b.forecast.estimatedDaysLeft;
       });
-  }, [enriched, zoneFilter, statusFilter, search, storeMap]);
+  }, [enriched, zoneFilter, search, storeMap]);
 
   return (
     <div className="space-y-4">
-      {/* Who's Eating? Serving Multiplier Strip — Zero Mental Load */}
+      {/* Who's Eating? Serving Multiplier Strip */}
       <div className="rounded-2xl border border-stone-200/90 bg-white px-3.5 py-2.5 shadow-2xs flex flex-wrap items-center justify-between gap-2.5">
         <div className="flex items-center gap-2 text-xs font-semibold text-stone-700">
           <Users className="w-4 h-4 text-teal-700" />
@@ -221,66 +215,7 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
         </div>
       </div>
 
-      {/* Top KPI summary cards */}
-      <div className="grid grid-cols-3 gap-2.5 sm:gap-3.5">
-        <button
-          type="button"
-          onClick={() => setStatusFilter('all')}
-          className={`rounded-2xl border p-3 text-left transition ${
-            statusFilter === 'all'
-              ? 'border-teal-600 bg-teal-50/70 shadow-2xs'
-              : 'border-stone-200/80 bg-white hover:border-stone-300'
-          }`}
-        >
-          <div className="text-[11px] font-medium uppercase tracking-wider text-stone-500">
-            {lang === 'fa' ? 'کل اقلام' : 'Tracked'}
-          </div>
-          <div className="mt-0.5 flex items-baseline gap-1.5">
-            <span className="text-xl sm:text-2xl font-bold text-stone-900">{stats.total}</span>
-            <span className="text-xs text-stone-500">{lang === 'fa' ? 'قلم' : 'items'}</span>
-          </div>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setStatusFilter(statusFilter === 'attention' ? 'all' : 'attention')}
-          className={`rounded-2xl border p-3 text-left transition ${
-            statusFilter === 'attention'
-              ? 'border-amber-500 bg-amber-50 shadow-2xs'
-              : 'border-stone-200/80 bg-white hover:border-stone-300'
-          }`}
-        >
-          <div className="text-[11px] font-medium uppercase tracking-wider text-amber-700">
-            {lang === 'fa' ? 'نیاز آخر هفته' : 'Weekend Buy'}
-          </div>
-          <div className="mt-0.5 flex items-baseline gap-1.5">
-            <span className="text-xl sm:text-2xl font-bold text-amber-700">{stats.buyThisWeekend}</span>
-            {stats.outCount > 0 && (
-              <span className="text-xs text-amber-600">({stats.outCount} out)</span>
-            )}
-          </div>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setStatusFilter(statusFilter === 'expiring' ? 'all' : 'expiring')}
-          className={`rounded-2xl border p-3 text-left transition ${
-            statusFilter === 'expiring'
-              ? 'border-rose-500 bg-rose-50 shadow-2xs'
-              : 'border-stone-200/80 bg-white hover:border-stone-300'
-          }`}
-        >
-          <div className="text-[11px] font-medium uppercase tracking-wider text-rose-700">
-            {lang === 'fa' ? 'زود مصرف شود' : 'Use Soon'}
-          </div>
-          <div className="mt-0.5 flex items-baseline gap-1.5">
-            <span className="text-xl sm:text-2xl font-bold text-rose-600">{stats.expiringSoon}</span>
-            <span className="text-xs text-rose-500">{lang === 'fa' ? 'تازه' : 'fresh'}</span>
-          </div>
-        </button>
-      </div>
-
-      {/* Search + Quick Actions (Scan Receipt + Add Item) */}
+      {/* Search + Quick Actions (Scan Receipt + Add Item — ONLY in Kitchen tab) */}
       <div className="flex flex-col sm:flex-row gap-2.5 items-stretch sm:items-center justify-between">
         <div className="relative flex-1">
           <Search className="w-4 h-4 text-stone-400 absolute top-1/2 -translate-y-1/2 left-3.5 pointer-events-none" />
@@ -347,13 +282,15 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
       {/* Inventory Cards Grid */}
       {filtered.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-stone-300 bg-white p-10 text-center text-sm text-stone-500">
-          No matching items found. Try clearing your filter or scan a receipt to add items.
+          No matching items found. Try clearing your filter or add a new item.
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
           {filtered.map(({ item, forecast }) => {
             const store = storeMap.get(forecast.learnedStoreId);
             const nut = item.nutrition;
+            const onShoppingList = shoppingItemIds.has(item.id);
+
             const barColor =
               forecast.stockState === 'critical'
                 ? 'bg-rose-500'
@@ -366,6 +303,11 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
                 ? { label: t(lang, 'outOfStock'), cls: 'bg-rose-100 text-rose-800 border-rose-200' }
                 : forecast.verdict === 'buy_this_weekend'
                 ? { label: t(lang, 'buyThisWeekend'), cls: 'bg-amber-100 text-amber-800 border-amber-200' }
+                : forecast.verdict === 'runs_out_next_week'
+                ? {
+                    label: `Runs out ~${forecast.runOutDayLabel} next wk`,
+                    cls: 'bg-amber-50 text-amber-900 border-amber-200',
+                  }
                 : forecast.verdict === 'borderline'
                 ? { label: t(lang, 'borderline'), cls: 'bg-sky-50 text-sky-800 border-sky-200' }
                 : { label: t(lang, 'goodNextWeek'), cls: 'bg-emerald-50 text-emerald-800 border-emerald-200' };
@@ -411,7 +353,6 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
                       )}
                     </div>
 
-                    {/* Metadata line — compact in Simple mode, full in Detailed mode */}
                     <div className="mt-1 flex items-center flex-wrap gap-x-2 gap-y-1 text-xs text-stone-500">
                       <span className="inline-flex items-center gap-1 font-medium text-stone-600">
                         {ZONE_ICONS[item.zone]}
@@ -439,16 +380,45 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
                   </div>
 
                   <div className="flex items-center gap-1 shrink-0">
+                    {/* Quick Manual Add to Shopping List */}
+                    <button
+                      type="button"
+                      onClick={() => onAddToShoppingManually(item.id)}
+                      className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold border transition ${
+                        onShoppingList
+                          ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                          : 'bg-white text-stone-600 border-stone-200 hover:border-teal-400 hover:text-teal-800'
+                      }`}
+                      title={
+                        onShoppingList
+                          ? 'Already on Shopping List'
+                          : 'Add manually to Shopping List (marks current stock)'
+                      }
+                    >
+                      {onShoppingList ? (
+                        <>
+                          <Check className="w-3 h-3" />
+                          <span>Listed</span>
+                        </>
+                      ) : (
+                        <>
+                          <ShoppingCart className="w-3 h-3" />
+                          <span>+ Shop</span>
+                        </>
+                      )}
+                    </button>
+
                     {isDetailed && (
                       <button
                         type="button"
                         onClick={() => setModalState({ item, initialTab: 'nutrition' })}
                         className="p-1.5 rounded-lg text-teal-700 hover:bg-teal-50"
-                        title="Scan / edit Nutrition Facts label"
+                        title="Scan barcode / nutrition facts"
                       >
                         <Camera className="w-4 h-4" />
                       </button>
                     )}
+
                     <button
                       type="button"
                       onClick={() => setModalState({ item, initialTab: 'basics' })}
@@ -479,7 +449,6 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
                     />
                   </div>
 
-                  {/* Continuous quick level taps */}
                   {item.trackingMode === 'continuous' && (
                     <div className="flex items-center gap-1 pt-0.5">
                       {[100, 75, 50, 25, 0].map((pct) => {
@@ -524,7 +493,6 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
                       </span>
                     )}
 
-                    {/* In Simple Mode, only show protein badge if it's a meaningful protein source */}
                     {!isDetailed && item.proteinPerPortion >= 12 && (
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-indigo-50 text-indigo-700">
                         <Flame className="w-3 h-3" />
@@ -580,14 +548,14 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
                           className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-teal-700 hover:text-teal-900"
                         >
                           <Camera className="w-3.5 h-3.5" />
-                          Scan nutrition label to track protein, sugar & micronutrients
+                          Scan barcode or nutrition label
                         </button>
                       )}
                     </div>
                   )}
                 </div>
 
-                {/* Action Buttons — Scaled to Solo / Together / Guests! */}
+                {/* Action Buttons */}
                 <div className="flex items-center gap-2 pt-2 border-t border-stone-100">
                   {item.remainingPortions > 0 ? (
                     <>
@@ -608,7 +576,6 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
                             })`}
                       </button>
 
-                      {/* Quick -1 fallback when in Together (2x) or Guests mode */}
                       {servingMultiplier > 1 && item.remainingPortions > 1 && (
                         <button
                           type="button"

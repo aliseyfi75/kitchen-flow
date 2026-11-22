@@ -1,5 +1,15 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Barcode, Camera, CheckCircle2, Loader2, Search, Sparkles, Trash2, X } from 'lucide-react';
+import {
+  ArrowRight,
+  Barcode,
+  Camera,
+  CheckCircle2,
+  Loader2,
+  Search,
+  Sparkles,
+  Trash2,
+  X,
+} from 'lucide-react';
 import {
   FoodCategory,
   InventoryItem,
@@ -34,6 +44,11 @@ export const ItemModal: React.FC<ItemModalProps> = ({
 }) => {
   const isNew = !item;
   const labelInputRef = useRef<HTMLInputElement>(null);
+
+  // New items open directly on the fast Barcode-First step; editing opens the form directly
+  const [step, setStep] = useState<'barcode_first' | 'form'>(
+    isNew ? 'barcode_first' : 'form'
+  );
   const [activeTab, setActiveTab] = useState<'basics' | 'nutrition'>(initialTab);
 
   // Basics state
@@ -104,7 +119,26 @@ export const ItemModal: React.FC<ItemModalProps> = ({
     };
   }, []);
 
-  const runBarcodeLookup = async (code: string) => {
+  const applyScannedNutrition = (scanned: NutritionFacts) => {
+    setServingSizeLabel(scanned.servingSizeLabel ?? portionLabel);
+    setCalories(scanned.calories);
+    setProtein(scanned.protein);
+    setSugar(scanned.sugar);
+    setFiber(scanned.fiber);
+    setCarbs(scanned.carbs);
+    setFat(scanned.fat);
+    setSodiumMg(scanned.sodiumMg ?? 0);
+    setIronPct(scanned.micronutrients.ironPct ?? 0);
+    setCalciumPct(scanned.micronutrients.calciumPct ?? 0);
+    setPotassiumPct(scanned.micronutrients.potassiumPct ?? 0);
+    setVitaminDPct(scanned.micronutrients.vitaminDPct ?? 0);
+    setVitaminCPct(scanned.micronutrients.vitaminCPct ?? 0);
+    setOmega3(Boolean(scanned.micronutrients.omega3));
+    setHighlightsText((scanned.micronutrients.highlights ?? []).join(', '));
+    setNutritionSource('label_scan');
+  };
+
+  const runBarcodeLookup = async (code: string, advanceToForm = false) => {
     setIsLookingUpBarcode(true);
     setBarcodeError(null);
     setScanSuccessMsg(null);
@@ -113,21 +147,30 @@ export const ItemModal: React.FC<ItemModalProps> = ({
 
     if (result.found && result.nutrition) {
       applyScannedNutrition(result.nutrition);
-      if (isNew && !name.trim() && result.productName) {
+      if (result.productName && (!name.trim() || advanceToForm)) {
         setName(result.productName);
       }
-      if (isNew && result.quantity && packDescription === '1 pack') {
+      if (result.quantity && (packDescription === '1 pack' || advanceToForm)) {
         setPackDescription(result.quantity);
       }
+      if (result.nutrition.servingSizeLabel && (portionLabel === '1 portion' || advanceToForm)) {
+        setPortionLabel(result.nutrition.servingSizeLabel);
+      }
       setScanSuccessMsg(
-        `Found via ${result.sourceLabel}${result.productName ? `: ${result.productName}` : ''}! Review below and tap Save.`
+        `Loaded from Open Food Facts${result.productName ? `: ${result.productName}` : ''} (${result.nutrition.protein}g protein, ${result.nutrition.sugar}g sugar, ${result.nutrition.calories} kcal). Review details & save!`
       );
+      if (advanceToForm) {
+        setStep('form');
+        setActiveTab('basics');
+      }
     } else {
-      setBarcodeError(result.error || 'Product not found — try scanning the Nutrition Facts table below.');
+      setBarcodeError(
+        result.error || 'Product not found — you can skip to enter manually or scan the nutrition label.'
+      );
     }
   };
 
-  const startLiveBarcodeCamera = async () => {
+  const startLiveBarcodeCamera = async (advanceToForm = false) => {
     setBarcodeError(null);
     const BarcodeDetectorCtor = (
       window as unknown as {
@@ -139,7 +182,7 @@ export const ItemModal: React.FC<ItemModalProps> = ({
 
     if (!BarcodeDetectorCtor || !navigator.mediaDevices?.getUserMedia) {
       setBarcodeError(
-        'Live camera barcode detection requires Chrome/Android or Safari with BarcodeDetector — you can type the UPC below or snap the Nutrition Facts label.'
+        'Live camera barcode detection requires Chrome/Android or Safari with BarcodeDetector — enter the barcode below or skip to fill manually.'
       );
       return;
     }
@@ -169,7 +212,7 @@ export const ItemModal: React.FC<ItemModalProps> = ({
             const detected = codes[0].rawValue;
             setBarcodeInput(detected);
             stopCamera();
-            await runBarcodeLookup(detected);
+            await runBarcodeLookup(detected, advanceToForm);
             return;
           }
         } catch {
@@ -181,28 +224,8 @@ export const ItemModal: React.FC<ItemModalProps> = ({
       };
       window.setTimeout(poll, 500);
     } catch {
-      setBarcodeError('Camera permission denied or unavailable. Type the barcode number below instead.');
+      setBarcodeError('Camera permission denied or unavailable. Type the barcode number below or skip.');
     }
-  };
-
-  const applyScannedNutrition = (scanned: NutritionFacts) => {
-    setServingSizeLabel(scanned.servingSizeLabel ?? portionLabel);
-    setCalories(scanned.calories);
-    setProtein(scanned.protein);
-    setSugar(scanned.sugar);
-    setFiber(scanned.fiber);
-    setCarbs(scanned.carbs);
-    setFat(scanned.fat);
-    setSodiumMg(scanned.sodiumMg ?? 0);
-    setIronPct(scanned.micronutrients.ironPct ?? 0);
-    setCalciumPct(scanned.micronutrients.calciumPct ?? 0);
-    setPotassiumPct(scanned.micronutrients.potassiumPct ?? 0);
-    setVitaminDPct(scanned.micronutrients.vitaminDPct ?? 0);
-    setVitaminCPct(scanned.micronutrients.vitaminCPct ?? 0);
-    setOmega3(Boolean(scanned.micronutrients.omega3));
-    setHighlightsText((scanned.micronutrients.highlights ?? []).join(', '));
-    setNutritionSource('label_scan');
-    setScanSuccessMsg('Nutrition Facts table extracted! Review any field below and tap Save.');
   };
 
   const handleLabelPhoto = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -213,6 +236,7 @@ export const ItemModal: React.FC<ItemModalProps> = ({
     setScanSuccessMsg(null);
     window.setTimeout(() => {
       applyScannedNutrition(simulateNutritionLabelScan(name || alias || 'packaged item'));
+      setScanSuccessMsg('Nutrition Facts table extracted! Review any field below and tap Save.');
       setIsScanningLabel(false);
     }, 550);
   };
@@ -222,6 +246,7 @@ export const ItemModal: React.FC<ItemModalProps> = ({
     setScanSuccessMsg(null);
     window.setTimeout(() => {
       applyScannedNutrition(simulateNutritionLabelScan(name || alias || 'packaged item'));
+      setScanSuccessMsg('Nutrition Facts table extracted! Review any field below and tap Save.');
       setIsScanningLabel(false);
     }, 400);
   };
@@ -258,7 +283,8 @@ export const ItemModal: React.FC<ItemModalProps> = ({
             highlights: highlights.length > 0 ? highlights : undefined,
           },
           source: nutritionSource,
-          lastScannedAt: nutritionSource === 'label_scan' ? new Date().toISOString() : initNut?.lastScannedAt,
+          lastScannedAt:
+            nutritionSource === 'label_scan' ? new Date().toISOString() : initNut?.lastScannedAt,
         }
       : undefined;
 
@@ -296,7 +322,11 @@ export const ItemModal: React.FC<ItemModalProps> = ({
         <div className="px-5 pt-4 pb-3 bg-white border-b border-stone-100 space-y-3 shrink-0">
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-bold text-stone-900">
-              {isNew
+              {step === 'barcode_first'
+                ? lang === 'fa'
+                  ? 'اسکن بارکد کالا'
+                  : 'Scan Barcode to Add Item'
+                : isNew
                 ? lang === 'fa'
                   ? 'افزودن ماده غذایی'
                   : 'Add Kitchen Item'
@@ -304,597 +334,657 @@ export const ItemModal: React.FC<ItemModalProps> = ({
             </h2>
             <button
               type="button"
-              onClick={onClose}
+              onClick={() => {
+                stopCamera();
+                onClose();
+              }}
               className="p-2 rounded-full text-stone-500 hover:bg-stone-100"
             >
               <X className="w-5 h-5" />
             </button>
           </div>
 
-          {/* 2-Tab Switcher: Basics vs Nutrition Facts Scanner */}
-          <div className="grid grid-cols-2 gap-1.5 bg-stone-100 p-1 rounded-xl">
-            <button
-              type="button"
-              onClick={() => setActiveTab('basics')}
-              className={`py-1.5 rounded-lg text-xs font-bold transition ${
-                activeTab === 'basics'
-                  ? 'bg-white text-stone-900 shadow-2xs'
-                  : 'text-stone-500 hover:text-stone-800'
-              }`}
-            >
-              Stock & Portions
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveTab('nutrition')}
-              className={`py-1.5 rounded-lg text-xs font-bold transition inline-flex items-center justify-center gap-1.5 ${
-                activeTab === 'nutrition'
-                  ? 'bg-white text-teal-800 shadow-2xs'
-                  : 'text-stone-500 hover:text-stone-800'
-              }`}
-            >
-              <Camera className="w-3.5 h-3.5" />
-              Nutrition Facts & Scan
-            </button>
-          </div>
+          {step === 'form' && (
+            <div className="grid grid-cols-2 gap-1.5 bg-stone-100 p-1 rounded-xl">
+              <button
+                type="button"
+                onClick={() => setActiveTab('basics')}
+                className={`py-1.5 rounded-lg text-xs font-bold transition ${
+                  activeTab === 'basics'
+                    ? 'bg-white text-stone-900 shadow-2xs'
+                    : 'text-stone-500 hover:text-stone-800'
+                }`}
+              >
+                Stock & Portions
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab('nutrition')}
+                className={`py-1.5 rounded-lg text-xs font-bold transition inline-flex items-center justify-center gap-1.5 ${
+                  activeTab === 'nutrition'
+                    ? 'bg-white text-teal-800 shadow-2xs'
+                    : 'text-stone-500 hover:text-stone-800'
+                }`}
+              >
+                <Camera className="w-3.5 h-3.5" />
+                Nutrition Facts & Scan
+              </button>
+            </div>
+          )}
         </div>
 
-        <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-5 space-y-4">
-          {activeTab === 'basics' ? (
-            <>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-medium text-stone-600 mb-1">
-                    Primary Name (EN or FA) *
-                  </label>
-                  <input
-                    dir="auto"
-                    required
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    placeholder="e.g. Chicken Breast"
-                    className="w-full rounded-xl border border-stone-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-stone-600 mb-1">
-                    Secondary Alias (Persian / English)
-                  </label>
-                  <input
-                    dir="auto"
-                    value={alias}
-                    onChange={(e) => setAlias(e.target.value)}
-                    placeholder="مثلاً سینه مرغ"
-                    className="w-full rounded-xl border border-stone-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
-                  />
-                </div>
+        {/* STEP 1 FOR NEW ITEMS: BARCODE SCANNER FIRST */}
+        {step === 'barcode_first' ? (
+          <div className="flex-1 overflow-y-auto p-5 space-y-5">
+            <div className="rounded-3xl border-2 border-dashed border-indigo-200 bg-indigo-50/45 p-5 text-center space-y-3.5">
+              <div className="w-14 h-14 rounded-2xl bg-indigo-700 text-white flex items-center justify-center mx-auto shadow-sm">
+                <Barcode className="w-7 h-7" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-stone-900">
+                  Scan product barcode to auto-fill everything
+                </h3>
+                <p className="text-xs text-stone-600 mt-1">
+                  Loads product name, serving size, protein, sugar, fiber & micronutrients automatically from Open Food Facts.
+                </p>
               </div>
 
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                <div>
-                  <label className="block text-xs font-medium text-stone-600 mb-1">Storage Zone</label>
-                  <select
-                    value={zone}
-                    onChange={(e) => setZone(e.target.value as StorageZone)}
-                    className="w-full rounded-xl border border-stone-200 px-3 py-2 text-sm bg-white"
-                  >
-                    {(Object.keys(ZONE_META) as StorageZone[]).map((z) => (
-                      <option key={z} value={z}>
-                        {ZONE_META[z][lang]}
-                      </option>
-                    ))}
-                  </select>
+              {cameraActive && (
+                <div className="rounded-2xl overflow-hidden border border-indigo-300 bg-black relative">
+                  <video ref={videoRef} playsInline muted className="w-full h-48 object-cover" />
+                  <div className="absolute inset-x-6 top-1/2 h-0.5 bg-teal-400 shadow" />
                 </div>
-                <div>
-                  <label className="block text-xs font-medium text-stone-600 mb-1">Category</label>
-                  <select
-                    value={category}
-                    onChange={(e) => setCategory(e.target.value as FoodCategory)}
-                    className="w-full rounded-xl border border-stone-200 px-3 py-2 text-sm bg-white"
-                  >
-                    {(Object.keys(CATEGORY_META) as FoodCategory[]).map((c) => (
-                      <option key={c} value={c}>
-                        {CATEGORY_META[c][lang]}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="col-span-2 sm:col-span-1">
-                  <label className="block text-xs font-medium text-stone-600 mb-1">Preferred Store</label>
-                  <select
-                    value={defaultStoreId}
-                    onChange={(e) => setDefaultStoreId(e.target.value)}
-                    className="w-full rounded-xl border border-stone-200 px-3 py-2 text-sm bg-white"
-                  >
-                    {stores.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
+              )}
 
-              <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() =>
+                  cameraActive ? stopCamera() : startLiveBarcodeCamera(true)
+                }
+                className="w-full inline-flex items-center justify-center gap-2 rounded-2xl bg-indigo-700 hover:bg-indigo-800 text-white py-3 px-4 text-sm font-bold shadow-xs transition"
+              >
+                <Camera className="w-4 h-4" />
+                {cameraActive ? 'Stop Camera' : 'Open Camera Barcode Scanner'}
+              </button>
+
+              {/* Manual UPC input */}
+              <div className="flex items-center gap-2 pt-1">
+                <div className="relative flex-1">
+                  <Search className="w-4 h-4 text-stone-400 absolute top-1/2 -translate-y-1/2 left-3" />
+                  <input
+                    value={barcodeInput}
+                    onChange={(e) => setBarcodeInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        runBarcodeLookup(barcodeInput, true);
+                      }
+                    }}
+                    placeholder="Or type / paste UPC barcode..."
+                    className="w-full rounded-xl border border-indigo-200 bg-white pl-9 pr-3 py-2.5 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
                 <button
                   type="button"
-                  onClick={() => setTrackingMode('portioned')}
-                  className={`rounded-xl border p-2.5 text-left text-xs transition ${
-                    trackingMode === 'portioned'
-                      ? 'border-teal-600 bg-teal-50 text-teal-900 font-medium'
-                      : 'border-stone-200 text-stone-600'
-                  }`}
+                  disabled={isLookingUpBarcode || !barcodeInput.trim()}
+                  onClick={() => runBarcodeLookup(barcodeInput, true)}
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-stone-900 hover:bg-stone-800 disabled:opacity-45 text-white px-4 py-2.5 text-xs font-bold shrink-0"
                 >
-                  <div className="font-semibold">Portioned Packs / Count</div>
-                  <div className="text-[11px] opacity-80">Freezer bags, eggs, fillets</div>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setTrackingMode('continuous')}
-                  className={`rounded-xl border p-2.5 text-left text-xs transition ${
-                    trackingMode === 'continuous'
-                      ? 'border-teal-600 bg-teal-50 text-teal-900 font-medium'
-                      : 'border-stone-200 text-stone-600'
-                  }`}
-                >
-                  <div className="font-semibold">Continuous / Level Bar</div>
-                  <div className="text-[11px] opacity-80">Milk, spinach, rice, oil</div>
+                  {isLookingUpBarcode ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    'Lookup'
+                  )}
                 </button>
               </div>
 
-              <div className="grid grid-cols-3 gap-3">
-                <div>
-                  <label className="block text-xs font-medium text-stone-600 mb-1">Full Pack Portions</label>
-                  <input
-                    type="number"
-                    step="0.5"
-                    min="1"
-                    value={totalPortions}
-                    onChange={(e) => setTotalPortions(Number(e.target.value))}
-                    className="w-full rounded-xl border border-stone-200 px-3 py-2 text-sm"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-stone-600 mb-1">Remaining Now</label>
-                  <input
-                    type="number"
-                    step="0.5"
-                    min="0"
-                    value={remainingPortions}
-                    onChange={(e) => setRemainingPortions(Number(e.target.value))}
-                    className="w-full rounded-xl border border-stone-200 px-3 py-2 text-sm"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-stone-600 mb-1">Avg Days / Pack</label>
-                  <input
-                    type="number"
-                    step="0.5"
-                    min="1"
-                    value={avgDaysPerFullPack}
-                    onChange={(e) => setAvgDaysPerFullPack(Number(e.target.value))}
-                    className="w-full rounded-xl border border-stone-200 px-3 py-2 text-sm"
-                  />
-                </div>
+              {/* Instant Sample Live Barcodes */}
+              <div className="flex items-center justify-center flex-wrap gap-1.5 pt-1">
+                <span className="text-[11px] font-semibold text-stone-500">Test live UPC:</span>
+                {SAMPLE_BARCODES.map((sb) => (
+                  <button
+                    key={sb.code}
+                    type="button"
+                    onClick={() => {
+                      setBarcodeInput(sb.code);
+                      runBarcodeLookup(sb.code, true);
+                    }}
+                    className="px-2.5 py-1 rounded-lg bg-white border border-indigo-200 hover:border-indigo-400 text-[11px] font-semibold text-indigo-900 shadow-2xs"
+                  >
+                    {sb.label}
+                  </button>
+                ))}
               </div>
+            </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-medium text-stone-600 mb-1">Portion Size Label</label>
-                  <input
-                    dir="auto"
-                    value={portionLabel}
-                    onChange={(e) => setPortionLabel(e.target.value)}
-                    placeholder="e.g. 180g serving, 1 cup"
-                    className="w-full rounded-xl border border-stone-200 px-3 py-2 text-sm"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-stone-600 mb-1">Pack Description</label>
-                  <input
-                    dir="auto"
-                    value={packDescription}
-                    onChange={(e) => setPackDescription(e.target.value)}
-                    placeholder="e.g. 1.5 kg Costco pack"
-                    className="w-full rounded-xl border border-stone-200 px-3 py-2 text-sm"
-                  />
-                </div>
+            {barcodeError && (
+              <div className="rounded-2xl bg-amber-50 border border-amber-200 p-3 text-xs text-amber-900 space-y-2">
+                <div>{barcodeError}</div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    stopCamera();
+                    setStep('form');
+                    setActiveTab('basics');
+                  }}
+                  className="inline-flex items-center gap-1 font-bold text-amber-950 underline"
+                >
+                  Continue to manual entry →
+                </button>
               </div>
+            )}
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-medium text-stone-600 mb-1">Best-By Date (Optional)</label>
-                  <input
-                    type="date"
-                    value={expiresAt}
-                    onChange={(e) => setExpiresAt(e.target.value)}
-                    className="w-full rounded-xl border border-stone-200 px-3 py-2 text-sm"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-stone-600 mb-1">Quick Note</label>
-                  <input
-                    dir="auto"
-                    value={notes}
-                    onChange={(e) => setNotes(e.target.value)}
-                    placeholder="Optional note"
-                    className="w-full rounded-xl border border-stone-200 px-3 py-2 text-sm"
-                  />
-                </div>
+            {/* Clear Skip to Manual Form */}
+            <div className="flex items-center justify-between gap-3 pt-2 border-t border-stone-100">
+              <button
+                type="button"
+                onClick={() => {
+                  stopCamera();
+                  onClose();
+                }}
+                className="px-4 py-2.5 rounded-xl text-xs font-semibold text-stone-500 hover:bg-stone-100"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  stopCamera();
+                  setStep('form');
+                  setActiveTab('basics');
+                }}
+                className="inline-flex items-center gap-1.5 rounded-xl bg-stone-100 hover:bg-stone-200 text-stone-900 px-4 py-2.5 text-xs font-bold transition"
+              >
+                Skip — Fill Manually
+                <ArrowRight className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        ) : (
+          /* STEP 2 (OR EDIT): FULL ITEM FORM + NUTRITION TAB */
+          <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-5 space-y-4">
+            {scanSuccessMsg && (
+              <div className="flex items-start gap-2 text-xs font-semibold text-emerald-900 bg-emerald-50 border border-emerald-200 rounded-2xl px-3.5 py-2.5">
+                <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
+                <span>{scanSuccessMsg}</span>
               </div>
+            )}
 
-              <label className="flex items-center gap-2.5 text-xs text-stone-700 cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  checked={autoAddOnEmpty}
-                  onChange={(e) => setAutoAddOnEmpty(e.target.checked)}
-                  className="rounded border-stone-300 text-teal-600"
-                />
-                Automatically add to Shopping List when finished
-              </label>
-            </>
-          ) : (
-            /* Barcode Lookup + Nutrition Facts Label Scanner Tab */
-            <div className="space-y-4">
-              <input
-                ref={labelInputRef}
-                type="file"
-                accept="image/*"
-                capture="environment"
-                onChange={handleLabelPhoto}
-                className="hidden"
-              />
-
-              {/* 1. Primary: Barcode Scan & Live Web Lookup (Open Food Facts) */}
-              <div className="rounded-2xl border border-indigo-200 bg-indigo-50/50 p-3.5 space-y-2.5">
-                <div className="flex items-start justify-between gap-2">
+            {activeTab === 'basics' ? (
+              <>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <div className="text-xs font-bold text-indigo-950 flex items-center gap-1.5">
-                      <Barcode className="w-4 h-4 text-indigo-700" />
-                      Step 1 (Fastest): Scan Barcode → Auto-Load From Web
-                    </div>
-                    <p className="text-[11px] text-indigo-900/80 mt-0.5">
-                      Free live lookup via Open Food Facts — auto-fills name, protein, sugar, fiber & micronutrients.
-                    </p>
+                    <label className="block text-xs font-medium text-stone-600 mb-1">
+                      Primary Name (EN or FA) *
+                    </label>
+                    <input
+                      dir="auto"
+                      required
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      placeholder="e.g. Chicken Breast"
+                      className="w-full rounded-xl border border-stone-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-stone-600 mb-1">
+                      Secondary Alias (Persian / English)
+                    </label>
+                    <input
+                      dir="auto"
+                      value={alias}
+                      onChange={(e) => setAlias(e.target.value)}
+                      placeholder="مثلاً سینه مرغ"
+                      className="w-full rounded-xl border border-stone-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
+                    />
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2">
-                  <div className="relative flex-1">
-                    <Search className="w-3.5 h-3.5 text-stone-400 absolute top-1/2 -translate-y-1/2 left-3" />
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-stone-600 mb-1">Storage Zone</label>
+                    <select
+                      value={zone}
+                      onChange={(e) => setZone(e.target.value as StorageZone)}
+                      className="w-full rounded-xl border border-stone-200 px-3 py-2 text-sm bg-white"
+                    >
+                      {(Object.keys(ZONE_META) as StorageZone[]).map((z) => (
+                        <option key={z} value={z}>
+                          {ZONE_META[z][lang]}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-stone-600 mb-1">Category</label>
+                    <select
+                      value={category}
+                      onChange={(e) => setCategory(e.target.value as FoodCategory)}
+                      className="w-full rounded-xl border border-stone-200 px-3 py-2 text-sm bg-white"
+                    >
+                      {(Object.keys(CATEGORY_META) as FoodCategory[]).map((c) => (
+                        <option key={c} value={c}>
+                          {CATEGORY_META[c][lang]}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="col-span-2 sm:col-span-1">
+                    <label className="block text-xs font-medium text-stone-600 mb-1">Preferred Store</label>
+                    <select
+                      value={defaultStoreId}
+                      onChange={(e) => setDefaultStoreId(e.target.value)}
+                      className="w-full rounded-xl border border-stone-200 px-3 py-2 text-sm bg-white"
+                    >
+                      {stores.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setTrackingMode('portioned')}
+                    className={`rounded-xl border p-2.5 text-left text-xs transition ${
+                      trackingMode === 'portioned'
+                        ? 'border-teal-600 bg-teal-50 text-teal-900 font-medium'
+                        : 'border-stone-200 text-stone-600'
+                    }`}
+                  >
+                    <div className="font-semibold">Portioned Packs / Count</div>
+                    <div className="text-[11px] opacity-80">Freezer bags, eggs, fillets</div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTrackingMode('continuous')}
+                    className={`rounded-xl border p-2.5 text-left text-xs transition ${
+                      trackingMode === 'continuous'
+                        ? 'border-teal-600 bg-teal-50 text-teal-900 font-medium'
+                        : 'border-stone-200 text-stone-600'
+                    }`}
+                  >
+                    <div className="font-semibold">Continuous / Level Bar</div>
+                    <div className="text-[11px] opacity-80">Milk, spinach, rice, oil</div>
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-stone-600 mb-1">Full Pack Portions</label>
+                    <input
+                      type="number"
+                      step="0.5"
+                      min="1"
+                      value={totalPortions}
+                      onChange={(e) => setTotalPortions(Number(e.target.value))}
+                      className="w-full rounded-xl border border-stone-200 px-3 py-2 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-stone-600 mb-1">Remaining Now</label>
+                    <input
+                      type="number"
+                      step="0.5"
+                      min="0"
+                      value={remainingPortions}
+                      onChange={(e) => setRemainingPortions(Number(e.target.value))}
+                      className="w-full rounded-xl border border-stone-200 px-3 py-2 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-stone-600 mb-1">Avg Days / Pack</label>
+                    <input
+                      type="number"
+                      step="0.5"
+                      min="1"
+                      value={avgDaysPerFullPack}
+                      onChange={(e) => setAvgDaysPerFullPack(Number(e.target.value))}
+                      className="w-full rounded-xl border border-stone-200 px-3 py-2 text-sm"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-stone-600 mb-1">Portion Size Label</label>
+                    <input
+                      dir="auto"
+                      value={portionLabel}
+                      onChange={(e) => setPortionLabel(e.target.value)}
+                      placeholder="e.g. 180g serving, 1 cup"
+                      className="w-full rounded-xl border border-stone-200 px-3 py-2 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-stone-600 mb-1">Pack Description</label>
+                    <input
+                      dir="auto"
+                      value={packDescription}
+                      onChange={(e) => setPackDescription(e.target.value)}
+                      placeholder="e.g. 1.5 kg Costco pack"
+                      className="w-full rounded-xl border border-stone-200 px-3 py-2 text-sm"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-stone-600 mb-1">Best-By Date (Optional)</label>
+                    <input
+                      type="date"
+                      value={expiresAt}
+                      onChange={(e) => setExpiresAt(e.target.value)}
+                      className="w-full rounded-xl border border-stone-200 px-3 py-2 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-stone-600 mb-1">Quick Note</label>
+                    <input
+                      dir="auto"
+                      value={notes}
+                      onChange={(e) => setNotes(e.target.value)}
+                      placeholder="Optional note"
+                      className="w-full rounded-xl border border-stone-200 px-3 py-2 text-sm"
+                    />
+                  </div>
+                </div>
+
+                <label className="flex items-center gap-2.5 text-xs text-stone-700 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={autoAddOnEmpty}
+                    onChange={(e) => setAutoAddOnEmpty(e.target.checked)}
+                    className="rounded border-stone-300 text-teal-600"
+                  />
+                  Automatically add to Shopping List when finished
+                </label>
+              </>
+            ) : (
+              /* Barcode Lookup + Nutrition Facts Label Scanner Tab */
+              <div className="space-y-4">
+                <input
+                  ref={labelInputRef}
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  onChange={handleLabelPhoto}
+                  className="hidden"
+                />
+
+                {/* Barcode Lookup */}
+                <div className="rounded-2xl border border-indigo-200 bg-indigo-50/50 p-3.5 space-y-2.5">
+                  <div className="text-xs font-bold text-indigo-950 flex items-center gap-1.5">
+                    <Barcode className="w-4 h-4 text-indigo-700" />
+                    Scan Barcode → Load Nutrition From Web (Open Food Facts)
+                  </div>
+
+                  <div className="flex items-center gap-2">
                     <input
                       value={barcodeInput}
                       onChange={(e) => setBarcodeInput(e.target.value)}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter') {
                           e.preventDefault();
-                          runBarcodeLookup(barcodeInput);
+                          runBarcodeLookup(barcodeInput, false);
                         }
                       }}
                       placeholder="Enter or scan UPC / EAN barcode..."
-                      className="w-full rounded-xl border border-indigo-200 bg-white pl-8 pr-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      className="flex-1 rounded-xl border border-indigo-200 bg-white px-3 py-2 text-xs font-mono"
                     />
-                  </div>
-
-                  <button
-                    type="button"
-                    disabled={isLookingUpBarcode || !barcodeInput.trim()}
-                    onClick={() => runBarcodeLookup(barcodeInput)}
-                    className="inline-flex items-center gap-1.5 rounded-xl bg-indigo-700 hover:bg-indigo-800 disabled:opacity-45 text-white px-3.5 py-2 text-xs font-bold shrink-0"
-                  >
-                    {isLookingUpBarcode ? (
-                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    ) : (
-                      <Search className="w-3.5 h-3.5" />
-                    )}
-                    Lookup
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={cameraActive ? stopCamera : startLiveBarcodeCamera}
-                    className="inline-flex items-center gap-1 rounded-xl bg-white border border-indigo-200 hover:bg-indigo-50 text-indigo-800 px-3 py-2 text-xs font-bold shrink-0"
-                    title="Scan with live camera"
-                  >
-                    <Camera className="w-3.5 h-3.5" />
-                    {cameraActive ? 'Stop' : 'Scan'}
-                  </button>
-                </div>
-
-                {cameraActive && (
-                  <div className="rounded-xl overflow-hidden border border-indigo-300 bg-black relative">
-                    <video ref={videoRef} playsInline muted className="w-full h-40 object-cover" />
-                    <div className="absolute inset-x-4 top-1/2 h-0.5 bg-teal-400/80 shadow" />
-                  </div>
-                )}
-
-                <div className="flex items-center flex-wrap gap-1.5">
-                  <span className="text-[10px] font-semibold text-indigo-800">Try live UPC:</span>
-                  {SAMPLE_BARCODES.map((sb) => (
                     <button
-                      key={sb.code}
                       type="button"
-                      onClick={() => {
-                        setBarcodeInput(sb.code);
-                        runBarcodeLookup(sb.code);
-                      }}
-                      className="px-2 py-0.5 rounded-lg bg-white border border-indigo-200 hover:border-indigo-400 text-[10px] font-semibold text-indigo-900"
+                      disabled={isLookingUpBarcode || !barcodeInput.trim()}
+                      onClick={() => runBarcodeLookup(barcodeInput, false)}
+                      className="rounded-xl bg-indigo-700 hover:bg-indigo-800 disabled:opacity-45 text-white px-3.5 py-2 text-xs font-bold"
                     >
-                      {sb.label}
+                      {isLookingUpBarcode ? '...' : 'Lookup'}
                     </button>
-                  ))}
+                    <button
+                      type="button"
+                      onClick={() => (cameraActive ? stopCamera() : startLiveBarcodeCamera(false))}
+                      className="inline-flex items-center gap-1 rounded-xl bg-white border border-indigo-200 px-3 py-2 text-xs font-bold text-indigo-800"
+                    >
+                      <Camera className="w-3.5 h-3.5" />
+                      {cameraActive ? 'Stop' : 'Scan'}
+                    </button>
+                  </div>
+
+                  {cameraActive && (
+                    <div className="rounded-xl overflow-hidden border border-indigo-300 bg-black relative">
+                      <video ref={videoRef} playsInline muted className="w-full h-36 object-cover" />
+                    </div>
+                  )}
+
+                  {barcodeError && (
+                    <div className="text-[11px] font-medium text-amber-900 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
+                      {barcodeError}
+                    </div>
+                  )}
                 </div>
 
-                {barcodeError && (
-                  <div className="text-[11px] font-medium text-amber-900 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
-                    {barcodeError}
-                  </div>
-                )}
-              </div>
-
-              {/* 2. Fallback: Snap Nutrition Facts Label (for local/unlisted items) */}
-              <div className="rounded-2xl border border-teal-200 bg-teal-50/50 p-3.5 space-y-2.5">
-                <div>
+                {/* Fallback: Snap Nutrition Label */}
+                <div className="rounded-2xl border border-teal-200 bg-teal-50/50 p-3.5 space-y-2">
                   <div className="text-xs font-bold text-teal-950">
-                    Fallback (Local / Unlisted Items): Scan Nutrition Facts Table
+                    Fallback: Snap Nutrition Facts Label Photo
                   </div>
-                  <p className="text-[11px] text-teal-800/90 mt-0.5">
-                    If the barcode isn&apos;t in the database, snap the nutrition table photo instead.
-                  </p>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={() => labelInputRef.current?.click()}
-                    className="inline-flex items-center gap-1.5 rounded-xl bg-teal-700 hover:bg-teal-800 text-white px-3.5 py-2 text-xs font-bold shadow-2xs"
-                  >
-                    <Camera className="w-3.5 h-3.5" />
-                    Take Photo / Upload Label
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleDemoLabelScan}
-                    className="inline-flex items-center gap-1.5 rounded-xl bg-white border border-teal-200 hover:bg-teal-50 text-teal-900 px-3 py-2 text-xs font-semibold"
-                  >
-                    <Sparkles className="w-3.5 h-3.5 text-teal-600" />
-                    Try Sample Label Scan
-                  </button>
-                </div>
-
-                {isScanningLabel && (
-                  <div className="text-xs font-semibold text-teal-700 animate-pulse pt-1">
-                    Reading Nutrition Facts table...
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => labelInputRef.current?.click()}
+                      className="inline-flex items-center gap-1.5 rounded-xl bg-teal-700 hover:bg-teal-800 text-white px-3.5 py-2 text-xs font-bold"
+                    >
+                      <Camera className="w-3.5 h-3.5" />
+                      Upload / Take Label Photo
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleDemoLabelScan}
+                      className="inline-flex items-center gap-1.5 rounded-xl bg-white border border-teal-200 text-teal-900 px-3 py-2 text-xs font-semibold"
+                    >
+                      <Sparkles className="w-3.5 h-3.5 text-teal-600" />
+                      Try Sample Label Scan
+                    </button>
                   </div>
-                )}
-
-                {scanSuccessMsg && (
-                  <div className="flex items-center gap-1.5 text-xs font-semibold text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-2">
-                    <CheckCircle2 className="w-4 h-4 shrink-0" />
-                    {scanSuccessMsg}
-                  </div>
-                )}
-
-                {labelPreviewUrl && (
-                  <div className="flex items-center gap-2.5 pt-1">
+                  {isScanningLabel && (
+                    <div className="text-xs font-semibold text-teal-700 animate-pulse">
+                      Reading Nutrition Facts table...
+                    </div>
+                  )}
+                  {labelPreviewUrl && (
                     <img
                       src={labelPreviewUrl}
                       alt="Nutrition label preview"
                       className="w-12 h-14 object-cover rounded-lg border border-teal-200"
                     />
-                    <span className="text-[11px] text-teal-900">
-                      Photo attached (Phase 2 sends this securely to Gemini Vision via Supabase Edge Function).
-                    </span>
-                  </div>
-                )}
-              </div>
-
-              {/* Serving & Macros Grid */}
-              <div className="space-y-3">
-                <div>
-                  <label className="block text-xs font-semibold text-stone-600 mb-1">
-                    Label Serving Size
-                  </label>
-                  <input
-                    value={servingSizeLabel}
-                    onChange={(e) => setServingSizeLabel(e.target.value)}
-                    placeholder="e.g. 175g (3/4 cup)"
-                    className="w-full rounded-xl border border-stone-200 px-3 py-2 text-xs font-medium"
-                  />
+                  )}
                 </div>
 
-                <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+                {/* Macros Grid */}
+                <div className="space-y-3">
                   <div>
-                    <label className="block text-[10px] font-bold text-stone-500 mb-1">Calories</label>
+                    <label className="block text-xs font-semibold text-stone-600 mb-1">
+                      Label Serving Size
+                    </label>
                     <input
-                      type="number"
-                      min="0"
-                      value={calories}
-                      onChange={(e) => setCalories(Number(e.target.value))}
-                      className="w-full rounded-xl border border-stone-200 px-2 py-1.5 text-xs font-bold"
+                      value={servingSizeLabel}
+                      onChange={(e) => setServingSizeLabel(e.target.value)}
+                      className="w-full rounded-xl border border-stone-200 px-3 py-2 text-xs font-medium"
                     />
                   </div>
-                  <div>
-                    <label className="block text-[10px] font-bold text-indigo-700 mb-1">Protein (g)</label>
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.5"
-                      value={protein}
-                      onChange={(e) => setProtein(Number(e.target.value))}
-                      className="w-full rounded-xl border border-indigo-200 bg-indigo-50/40 px-2 py-1.5 text-xs font-bold text-indigo-900"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[10px] font-bold text-rose-700 mb-1">Sugar (g)</label>
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.5"
-                      value={sugar}
-                      onChange={(e) => setSugar(Number(e.target.value))}
-                      className="w-full rounded-xl border border-rose-200 bg-rose-50/40 px-2 py-1.5 text-xs font-bold text-rose-900"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[10px] font-bold text-emerald-700 mb-1">Fiber (g)</label>
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.5"
-                      value={fiber}
-                      onChange={(e) => setFiber(Number(e.target.value))}
-                      className="w-full rounded-xl border border-stone-200 px-2 py-1.5 text-xs font-bold"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[10px] font-bold text-stone-500 mb-1">Carbs (g)</label>
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.5"
-                      value={carbs}
-                      onChange={(e) => setCarbs(Number(e.target.value))}
-                      className="w-full rounded-xl border border-stone-200 px-2 py-1.5 text-xs"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[10px] font-bold text-stone-500 mb-1">Fat (g)</label>
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.5"
-                      value={fat}
-                      onChange={(e) => setFat(Number(e.target.value))}
-                      className="w-full rounded-xl border border-stone-200 px-2 py-1.5 text-xs"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              {/* Micronutrients (% Daily Value) */}
-              <div className="rounded-2xl border border-stone-200 bg-stone-50/70 p-3.5 space-y-3">
-                <div className="text-xs font-bold text-stone-800">
-                  Micronutrients (% Daily Value per serving)
-                </div>
-                <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
-                  <div>
-                    <label className="block text-[10px] font-semibold text-stone-500 mb-1">Iron %</label>
-                    <input
-                      type="number"
-                      min="0"
-                      value={ironPct}
-                      onChange={(e) => setIronPct(Number(e.target.value))}
-                      className="w-full rounded-lg border border-stone-200 bg-white px-2 py-1.5 text-xs"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[10px] font-semibold text-stone-500 mb-1">Calcium %</label>
-                    <input
-                      type="number"
-                      min="0"
-                      value={calciumPct}
-                      onChange={(e) => setCalciumPct(Number(e.target.value))}
-                      className="w-full rounded-lg border border-stone-200 bg-white px-2 py-1.5 text-xs"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[10px] font-semibold text-stone-500 mb-1">Potassium %</label>
-                    <input
-                      type="number"
-                      min="0"
-                      value={potassiumPct}
-                      onChange={(e) => setPotassiumPct(Number(e.target.value))}
-                      className="w-full rounded-lg border border-stone-200 bg-white px-2 py-1.5 text-xs"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[10px] font-semibold text-stone-500 mb-1">Vit D %</label>
-                    <input
-                      type="number"
-                      min="0"
-                      value={vitaminDPct}
-                      onChange={(e) => setVitaminDPct(Number(e.target.value))}
-                      className="w-full rounded-lg border border-stone-200 bg-white px-2 py-1.5 text-xs"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[10px] font-semibold text-stone-500 mb-1">Vit C %</label>
-                    <input
-                      type="number"
-                      min="0"
-                      value={vitaminCPct}
-                      onChange={(e) => setVitaminCPct(Number(e.target.value))}
-                      className="w-full rounded-lg border border-stone-200 bg-white px-2 py-1.5 text-xs"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[10px] font-semibold text-stone-500 mb-1">Sodium mg</label>
-                    <input
-                      type="number"
-                      min="0"
-                      value={sodiumMg}
-                      onChange={(e) => setSodiumMg(Number(e.target.value))}
-                      className="w-full rounded-lg border border-stone-200 bg-white px-2 py-1.5 text-xs"
-                    />
+                  <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+                    <div>
+                      <label className="block text-[10px] font-bold text-stone-500 mb-1">Calories</label>
+                      <input
+                        type="number"
+                        min="0"
+                        value={calories}
+                        onChange={(e) => setCalories(Number(e.target.value))}
+                        className="w-full rounded-xl border border-stone-200 px-2 py-1.5 text-xs font-bold"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-indigo-700 mb-1">Protein (g)</label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.5"
+                        value={protein}
+                        onChange={(e) => setProtein(Number(e.target.value))}
+                        className="w-full rounded-xl border border-indigo-200 bg-indigo-50/40 px-2 py-1.5 text-xs font-bold text-indigo-900"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-rose-700 mb-1">Sugar (g)</label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.5"
+                        value={sugar}
+                        onChange={(e) => setSugar(Number(e.target.value))}
+                        className="w-full rounded-xl border border-rose-200 bg-rose-50/40 px-2 py-1.5 text-xs font-bold text-rose-900"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-emerald-700 mb-1">Fiber (g)</label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.5"
+                        value={fiber}
+                        onChange={(e) => setFiber(Number(e.target.value))}
+                        className="w-full rounded-xl border border-stone-200 px-2 py-1.5 text-xs font-bold"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-stone-500 mb-1">Carbs (g)</label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.5"
+                        value={carbs}
+                        onChange={(e) => setCarbs(Number(e.target.value))}
+                        className="w-full rounded-xl border border-stone-200 px-2 py-1.5 text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-stone-500 mb-1">Fat (g)</label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.5"
+                        value={fat}
+                        onChange={(e) => setFat(Number(e.target.value))}
+                        className="w-full rounded-xl border border-stone-200 px-2 py-1.5 text-xs"
+                      />
+                    </div>
                   </div>
                 </div>
 
-                <div className="flex flex-col sm:flex-row sm:items-center gap-3 pt-1">
-                  <label className="inline-flex items-center gap-2 text-xs font-semibold text-stone-700 cursor-pointer shrink-0">
+                {/* Micronutrients */}
+                <div className="rounded-2xl border border-stone-200 bg-stone-50/70 p-3.5 space-y-3">
+                  <div className="text-xs font-bold text-stone-800">
+                    Micronutrients (% Daily Value per serving)
+                  </div>
+                  <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+                    {[
+                      ['Iron %', ironPct, setIronPct],
+                      ['Calcium %', calciumPct, setCalciumPct],
+                      ['Potassium %', potassiumPct, setPotassiumPct],
+                      ['Vit D %', vitaminDPct, setVitaminDPct],
+                      ['Vit C %', vitaminCPct, setVitaminCPct],
+                      ['Sodium mg', sodiumMg, setSodiumMg],
+                    ].map(([label, val, setter]) => (
+                      <div key={label as string}>
+                        <label className="block text-[10px] font-semibold text-stone-500 mb-1">
+                          {label as string}
+                        </label>
+                        <input
+                          type="number"
+                          min="0"
+                          value={val as number}
+                          onChange={(e) =>
+                            (setter as React.Dispatch<React.SetStateAction<number>>)(
+                              Number(e.target.value)
+                            )
+                          }
+                          className="w-full rounded-lg border border-stone-200 bg-white px-2 py-1.5 text-xs"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                  <div className="flex flex-col sm:flex-row sm:items-center gap-3 pt-1">
+                    <label className="inline-flex items-center gap-2 text-xs font-semibold text-stone-700 cursor-pointer shrink-0">
+                      <input
+                        type="checkbox"
+                        checked={omega3}
+                        onChange={(e) => setOmega3(e.target.checked)}
+                        className="rounded border-stone-300 text-teal-600"
+                      />
+                      Omega-3 Rich
+                    </label>
                     <input
-                      type="checkbox"
-                      checked={omega3}
-                      onChange={(e) => setOmega3(e.target.checked)}
-                      className="rounded border-stone-300 text-teal-600"
+                      value={highlightsText}
+                      onChange={(e) => setHighlightsText(e.target.value)}
+                      placeholder="Other micronutrients (e.g. B12, Folate, Zinc)"
+                      className="flex-1 rounded-lg border border-stone-200 bg-white px-2.5 py-1.5 text-xs"
                     />
-                    Omega-3 Rich
-                  </label>
-                  <input
-                    value={highlightsText}
-                    onChange={(e) => setHighlightsText(e.target.value)}
-                    placeholder="Other micronutrients (e.g. B12, Folate, Zinc, Probiotics)"
-                    className="flex-1 rounded-lg border border-stone-200 bg-white px-2.5 py-1.5 text-xs"
-                  />
+                  </div>
                 </div>
               </div>
-            </div>
-          )}
-
-          {/* Footer Buttons */}
-          <div className="flex items-center justify-between gap-3 pt-3 border-t border-stone-100">
-            {!isNew && onDelete ? (
-              <button
-                type="button"
-                onClick={() => {
-                  onDelete(item.id);
-                  onClose();
-                }}
-                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium text-rose-600 hover:bg-rose-50"
-              >
-                <Trash2 className="w-4 h-4" />
-                Delete
-              </button>
-            ) : (
-              <span />
             )}
 
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={onClose}
-                className="px-4 py-2 rounded-xl text-sm font-medium text-stone-600 hover:bg-stone-100"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                className="px-5 py-2 rounded-xl text-sm font-semibold bg-teal-700 text-white hover:bg-teal-800 shadow-xs"
-              >
-                {isNew ? 'Save Item' : 'Save Changes'}
-              </button>
+            {/* Footer */}
+            <div className="flex items-center justify-between gap-3 pt-3 border-t border-stone-100">
+              {!isNew && onDelete ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onDelete(item.id);
+                    onClose();
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium text-rose-600 hover:bg-rose-50"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  Delete
+                </button>
+              ) : isNew ? (
+                <button
+                  type="button"
+                  onClick={() => setStep('barcode_first')}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold text-indigo-700 hover:bg-indigo-50"
+                >
+                  <Barcode className="w-4 h-4" />
+                  Back to Barcode
+                </button>
+              ) : (
+                <span />
+              )}
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    stopCamera();
+                    onClose();
+                  }}
+                  className="px-4 py-2 rounded-xl text-sm font-medium text-stone-600 hover:bg-stone-100"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 rounded-xl text-sm font-semibold bg-teal-700 text-white hover:bg-teal-800 shadow-xs"
+                >
+                  {isNew ? 'Save Item' : 'Save Changes'}
+                </button>
+              </div>
             </div>
-          </div>
-        </form>
+          </form>
+        )}
       </div>
     </div>
   );

@@ -4,7 +4,6 @@ import {
   CheckCircle2,
   PackageCheck,
   Plus,
-  Receipt,
   ShoppingBag,
   Sparkles,
   Store as StoreIcon,
@@ -27,10 +26,10 @@ interface ShoppingViewProps {
   stores: Store[];
   shoppingList: ShoppingItem[];
   shoppingDay: number;
+  forecastHorizonDays: number;
   lang: UILanguage;
   uiMode: UIMode;
   onSyncForecast: () => void;
-  onOpenReceiptScanner: () => void;
   onAddShoppingItem: (entry: Omit<ShoppingItem, 'id' | 'addedAt' | 'checked'>) => void;
   onToggleChecked: (id: string) => void;
   onUpdateShoppingItem: (id: string, patch: Partial<ShoppingItem>) => void;
@@ -41,11 +40,21 @@ interface ShoppingViewProps {
 }
 
 const REASON_LABELS: Record<ShoppingItem['reason'], { en: string; fa: string; cls: string }> = {
-  finished: { en: 'Finished / Empty', fa: 'تمام شد', cls: 'bg-rose-50 text-rose-700 border-rose-200' },
+  finished: { en: 'Finished / Out', fa: 'تمام شد', cls: 'bg-rose-50 text-rose-700 border-rose-200' },
   forecast_weekend: {
-    en: 'Projected Run-Out',
-    fa: 'پیش‌بینی اتمام',
+    en: 'Runs Out by Weekend',
+    fa: 'اتمام تا آخر هفته',
     cls: 'bg-amber-50 text-amber-800 border-amber-200',
+  },
+  forecast_midweek: {
+    en: 'Runs Out Mid-Week Next Wk',
+    fa: 'اتمام وسط هفته بعد',
+    cls: 'bg-orange-50 text-orange-800 border-orange-200',
+  },
+  manual_from_kitchen: {
+    en: 'Manual Add (Still Have Some)',
+    fa: 'اضافه‌شده دستی (موجودی داریم)',
+    cls: 'bg-sky-50 text-sky-800 border-sky-200',
   },
   meal_plan: { en: 'For Meal Plan', fa: 'برنامه غذایی', cls: 'bg-indigo-50 text-indigo-700 border-indigo-200' },
   manual: { en: 'Added Manually', fa: 'دستی', cls: 'bg-stone-100 text-stone-600 border-stone-200' },
@@ -56,10 +65,10 @@ export const ShoppingView: React.FC<ShoppingViewProps> = ({
   stores,
   shoppingList,
   shoppingDay,
+  forecastHorizonDays,
   lang,
   uiMode,
   onSyncForecast,
-  onOpenReceiptScanner,
   onAddShoppingItem,
   onToggleChecked,
   onUpdateShoppingItem,
@@ -67,23 +76,13 @@ export const ShoppingView: React.FC<ShoppingViewProps> = ({
   onCompleteTrip,
 }) => {
   const isDetailed = uiMode === 'detailed';
-  const [showAddForm, setShowAddForm] = useState(false);
   const [showRestockModal, setShowRestockModal] = useState(false);
 
-  // Add item form state
-  const [newName, setNewName] = useState('');
-  const [newAlias, setNewAlias] = useState('');
-  const [newStoreId, setNewStoreId] = useState(stores[0]?.id ?? '');
-  const [newQty, setNewQty] = useState('1 pack');
-  const [newPortions, setNewPortions] = useState(6);
-  const [newZone, setNewZone] = useState<StorageZone>('fridge');
-  const [newPriority, setNewPriority] = useState<'essential' | 'optional'>('essential');
-
-  // Restock check-in overrides
   const [restockOverrides, setRestockOverrides] = useState<
     Record<string, { targetPortions: number; targetZone: StorageZone; storeId: string }>
   >({});
 
+  const itemMap = useMemo(() => new Map(items.map((i) => [i.id, i])), [items]);
   const checkedItems = useMemo(() => shoppingList.filter((s) => s.checked), [shoppingList]);
 
   const groupedByStore = useMemo(() => {
@@ -100,14 +99,17 @@ export const ShoppingView: React.FC<ShoppingViewProps> = ({
   const essentialStores = groupedByStore.filter((g) => g.essentialCount > 0);
   const optionalOnlyStores = groupedByStore.filter((g) => g.essentialCount === 0 && g.optionalCount > 0);
 
-  // Forecast Radar: items NOT yet on shopping list that are borderline or projected to run out
+  // Consumption Forecast Radar: ONLY items projected to NOT last the next `forecastHorizonDays` (default 10d)
   const forecastRadar = useMemo(() => {
     const listedIds = new Set(shoppingList.map((s) => s.inventoryItemId).filter(Boolean));
     return items
       .map((item) => ({ item, forecast: computeItemForecast(item, shoppingDay) }))
-      .filter(({ item, forecast }) => !listedIds.has(item.id) && (forecast.verdict === 'out' || forecast.verdict === 'buy_this_weekend' || forecast.verdict === 'borderline'))
+      .filter(
+        ({ item, forecast }) =>
+          !listedIds.has(item.id) && forecast.estimatedDaysLeft <= forecastHorizonDays
+      )
       .sort((a, b) => a.forecast.estimatedDaysLeft - b.forecast.estimatedDaysLeft);
-  }, [items, shoppingList, shoppingDay]);
+  }, [items, shoppingList, shoppingDay, forecastHorizonDays]);
 
   const handleOpenRestockModal = () => {
     const init: Record<string, { targetPortions: number; targetZone: StorageZone; storeId: string }> = {};
@@ -122,30 +124,11 @@ export const ShoppingView: React.FC<ShoppingViewProps> = ({
     setShowRestockModal(true);
   };
 
-  const handleAddSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newName.trim()) return;
-    onAddShoppingItem({
-      name: newName.trim(),
-      alias: newAlias.trim() || undefined,
-      storeId: newStoreId || stores[0]?.id || '',
-      quantityLabel: newQty.trim() || '1 pack',
-      targetPortions: Math.max(1, Number(newPortions) || 1),
-      targetZone: newZone,
-      priority: newPriority,
-      reason: 'manual',
-    });
-    setNewName('');
-    setNewAlias('');
-    setNewQty('1 pack');
-    setShowAddForm(false);
-  };
-
   const shoppingDayName = formatShoppingDayName(shoppingDay, lang);
 
   return (
     <div className="space-y-5">
-      {/* Weekend Trip Recommendation Hero */}
+      {/* Weekend Trip Recommendation Hero — Simplified (no Scan Receipt / Add Item here) */}
       <div className="rounded-3xl bg-gradient-to-br from-teal-800 via-teal-700 to-emerald-700 text-white p-5 sm:p-6 shadow-md">
         <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
           <div className="space-y-2">
@@ -189,41 +172,27 @@ export const ShoppingView: React.FC<ShoppingViewProps> = ({
           <div className="flex flex-wrap gap-2 shrink-0">
             <button
               type="button"
-              onClick={onOpenReceiptScanner}
-              className="inline-flex items-center gap-1.5 rounded-xl bg-white text-teal-900 hover:bg-teal-50 px-3.5 py-2 text-xs font-bold shadow-xs transition"
-            >
-              <Receipt className="w-4 h-4" />
-              {t(lang, 'scanReceipt')}
-            </button>
-            <button
-              type="button"
               onClick={onSyncForecast}
-              className="inline-flex items-center gap-1.5 rounded-xl bg-white/15 hover:bg-white/25 backdrop-blur px-3.5 py-2 text-xs font-semibold text-white transition"
+              className="inline-flex items-center gap-1.5 rounded-xl bg-white text-teal-900 hover:bg-teal-50 px-4 py-2.5 text-xs font-bold shadow-xs transition"
             >
               <Sparkles className="w-4 h-4" />
               {t(lang, 'addSmartSuggestions')}
-            </button>
-            <button
-              type="button"
-              onClick={() => setShowAddForm((v) => !v)}
-              className="inline-flex items-center gap-1.5 rounded-xl bg-white/15 hover:bg-white/25 backdrop-blur px-3.5 py-2 text-xs font-semibold text-white transition"
-            >
-              <Plus className="w-4 h-4" />
-              Add Item
             </button>
           </div>
         </div>
       </div>
 
-      {/* Forecast Radar: Unlisted items that may run out */}
+      {/* Forecast Radar: ONLY items not lasting the next N days (configurable in Settings, default 10d) */}
       {forecastRadar.length > 0 && (
         <div className="rounded-2xl border border-amber-200 bg-amber-50/70 p-4 space-y-2.5">
-          <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
             <div className="text-xs font-bold uppercase tracking-wider text-amber-900 flex items-center gap-1.5">
               <Sparkles className="w-4 h-4 text-amber-600" />
               Consumption Forecast Radar ({forecastRadar.length})
             </div>
-            <span className="text-[11px] text-amber-800">Not on your list yet</span>
+            <span className="text-[11px] text-amber-800">
+              Won&apos;t last the next <strong>{forecastHorizonDays} days</strong> (adjustable in Settings)
+            </span>
           </div>
           <div className="flex flex-wrap gap-2">
             {forecastRadar.map(({ item, forecast }) => (
@@ -239,13 +208,19 @@ export const ShoppingView: React.FC<ShoppingViewProps> = ({
                     quantityLabel: `${item.packDescription} (${item.totalPortions} portions)`,
                     targetPortions: item.totalPortions,
                     targetZone: item.zone,
-                    priority: forecast.verdict === 'borderline' ? 'optional' : 'essential',
-                    reason: 'forecast_weekend',
+                    priority: 'essential',
+                    reason:
+                      forecast.verdict === 'runs_out_next_week'
+                        ? 'forecast_midweek'
+                        : forecast.verdict === 'out'
+                        ? 'finished'
+                        : 'forecast_weekend',
+                    note: forecast.forecastDescription,
                   })
                 }
-                className="inline-flex items-center gap-1.5 rounded-xl bg-white border border-amber-200 hover:border-amber-400 px-3 py-1.5 text-xs text-stone-800 shadow-2xs transition"
+                className="inline-flex items-center gap-1.5 rounded-xl bg-white border border-amber-200 hover:border-amber-400 px-3 py-1.5 text-xs text-stone-800 shadow-2xs transition text-left"
               >
-                <Plus className="w-3.5 h-3.5 text-teal-700" />
+                <Plus className="w-3.5 h-3.5 text-teal-700 shrink-0" />
                 <span dir="auto" className="font-semibold">
                   {item.name}
                 </span>
@@ -254,121 +229,13 @@ export const ShoppingView: React.FC<ShoppingViewProps> = ({
                     ({item.alias})
                   </span>
                 )}
-                <span className="text-[11px] text-amber-700 font-medium">
-                  • ~{forecast.estimatedDaysLeft}d left
+                <span className="text-[11px] text-amber-800 font-medium">
+                  • ~{forecast.estimatedDaysLeft}d (~{forecast.runOutDayLabel})
                 </span>
               </button>
             ))}
           </div>
         </div>
-      )}
-
-      {/* Quick Add Shopping Item Form */}
-      {showAddForm && (
-        <form
-          onSubmit={handleAddSubmit}
-          className="rounded-2xl border border-stone-200 bg-white p-4 shadow-xs space-y-3"
-        >
-          <div className="flex items-center justify-between">
-            <h3 className="text-sm font-semibold text-stone-900">Add to Shopping List</h3>
-            <button
-              type="button"
-              onClick={() => setShowAddForm(false)}
-              className="text-stone-400 hover:text-stone-700"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <input
-              dir="auto"
-              required
-              value={newName}
-              onChange={(e) => setNewName(e.target.value)}
-              placeholder="Item name (e.g. Avocados)"
-              className="rounded-xl border border-stone-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
-            />
-            <input
-              dir="auto"
-              value={newAlias}
-              onChange={(e) => setNewAlias(e.target.value)}
-              placeholder="Alias (مثلاً آووکادو)"
-              className="rounded-xl border border-stone-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
-            />
-          </div>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-            <select
-              value={newStoreId}
-              onChange={(e) => setNewStoreId(e.target.value)}
-              className="rounded-xl border border-stone-200 px-3 py-2 text-xs bg-white"
-            >
-              {stores.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
-            <input
-              dir="auto"
-              value={newQty}
-              onChange={(e) => setNewQty(e.target.value)}
-              placeholder="Pack / Qty"
-              className="rounded-xl border border-stone-200 px-3 py-2 text-xs"
-            />
-            <input
-              type="number"
-              min="1"
-              value={newPortions}
-              onChange={(e) => setNewPortions(Number(e.target.value))}
-              placeholder="Portions"
-              className="rounded-xl border border-stone-200 px-3 py-2 text-xs"
-              title="Portions when restocked"
-            />
-            <select
-              value={newZone}
-              onChange={(e) => setNewZone(e.target.value as StorageZone)}
-              className="rounded-xl border border-stone-200 px-3 py-2 text-xs bg-white"
-            >
-              {(['fridge', 'freezer', 'pantry'] as StorageZone[]).map((z) => (
-                <option key={z} value={z}>
-                  → {ZONE_META[z][lang]}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="flex items-center justify-between pt-1">
-            <div className="flex items-center gap-2 text-xs">
-              <button
-                type="button"
-                onClick={() => setNewPriority('essential')}
-                className={`px-3 py-1 rounded-full font-semibold border ${
-                  newPriority === 'essential'
-                    ? 'bg-amber-100 border-amber-300 text-amber-900'
-                    : 'bg-stone-50 border-stone-200 text-stone-600'
-                }`}
-              >
-                {t(lang, 'essential')}
-              </button>
-              <button
-                type="button"
-                onClick={() => setNewPriority('optional')}
-                className={`px-3 py-1 rounded-full font-semibold border ${
-                  newPriority === 'optional'
-                    ? 'bg-stone-800 border-stone-800 text-white'
-                    : 'bg-stone-50 border-stone-200 text-stone-600'
-                }`}
-              >
-                {t(lang, 'optional')}
-              </button>
-            </div>
-            <button
-              type="submit"
-              className="rounded-xl bg-teal-700 hover:bg-teal-800 text-white px-4 py-2 text-xs font-semibold"
-            >
-              Add to List
-            </button>
-          </div>
-        </form>
       )}
 
       {/* Checked items action bar */}
@@ -394,7 +261,7 @@ export const ShoppingView: React.FC<ShoppingViewProps> = ({
           <CheckCircle2 className="w-8 h-8 text-teal-600 mx-auto" />
           <div className="text-sm font-semibold text-stone-800">Shopping list is empty!</div>
           <p className="text-xs text-stone-500">
-            Mark items finished in your Kitchen tab or tap "Sync Forecast to List" to populate weekend essentials.
+            Tap &ldquo;Sync Forecast&rdquo; above or use &ldquo;+ Shop&rdquo; on any item in the Kitchen tab.
           </p>
         </div>
       ) : (
@@ -437,6 +304,26 @@ export const ShoppingView: React.FC<ShoppingViewProps> = ({
               <div className="divide-y divide-stone-100">
                 {list.map((s) => {
                   const reasonMeta = REASON_LABELS[s.reason];
+                  const linkedInv = s.inventoryItemId ? itemMap.get(s.inventoryItemId) : undefined;
+                  const liveForecast = linkedInv
+                    ? computeItemForecast(linkedInv, shoppingDay)
+                    : null;
+
+                  // Live description: shows current stock when added manually, or mid-week projection explanation!
+                  let helperNote = s.note;
+                  if (s.reason === 'manual_from_kitchen' && linkedInv) {
+                    helperNote =
+                      linkedInv.remainingPortions > 0
+                        ? `Manually added — you still have ${linkedInv.remainingPortions}/${linkedInv.totalPortions} (${linkedInv.portionLabel}) at home (~${liveForecast?.estimatedDaysLeft}d left)`
+                        : 'Manually added — currently out of stock';
+                  } else if (
+                    (s.reason === 'forecast_midweek' || s.reason === 'forecast_weekend') &&
+                    liveForecast &&
+                    !helperNote
+                  ) {
+                    helperNote = liveForecast.forecastDescription;
+                  }
+
                   return (
                     <div
                       key={s.id}
@@ -485,6 +372,11 @@ export const ShoppingView: React.FC<ShoppingViewProps> = ({
                               {reasonMeta[lang]}
                             </span>
                           </div>
+                          {helperNote && (
+                            <div className="mt-1 text-[11px] text-stone-600 bg-stone-50 border border-stone-200/70 rounded-lg px-2 py-1 inline-block">
+                              {helperNote}
+                            </div>
+                          )}
                         </div>
                       </div>
 
@@ -572,15 +464,13 @@ export const ShoppingView: React.FC<ShoppingViewProps> = ({
                     key={s.id}
                     className="rounded-xl border border-stone-200 p-3.5 space-y-2.5 bg-stone-50/50"
                   >
-                    <div className="flex items-center justify-between">
-                      <div className="font-semibold text-sm text-stone-900">
-                        <span dir="auto">{s.name}</span>{' '}
-                        {s.alias && (
-                          <span dir="auto" className="text-xs text-teal-700 font-normal">
-                            ({s.alias})
-                          </span>
-                        )}
-                      </div>
+                    <div className="font-semibold text-sm text-stone-900">
+                      <span dir="auto">{s.name}</span>{' '}
+                      {s.alias && (
+                        <span dir="auto" className="text-xs text-teal-700 font-normal">
+                          ({s.alias})
+                        </span>
+                      )}
                     </div>
 
                     <div className="grid grid-cols-3 gap-2">
@@ -595,7 +485,10 @@ export const ShoppingView: React.FC<ShoppingViewProps> = ({
                           onChange={(e) =>
                             setRestockOverrides((prev) => ({
                               ...prev,
-                              [s.id]: { ...ov, targetPortions: Math.max(1, Number(e.target.value) || 1) },
+                              [s.id]: {
+                                ...ov,
+                                targetPortions: Math.max(1, Number(e.target.value) || 1),
+                              },
                             }))
                           }
                           className="w-full rounded-lg border border-stone-200 bg-white px-2.5 py-1.5 text-xs font-semibold"
@@ -613,7 +506,7 @@ export const ShoppingView: React.FC<ShoppingViewProps> = ({
                               [s.id]: { ...ov, targetZone: e.target.value as StorageZone },
                             }))
                           }
-                          className="w-full rounded-lg border border-stone-200 bg-white px-2 py-1.5 text-xs"
+                          className="w-full rounded-lg border border-stone-200 bg-white px-2.5 py-1.5 text-xs"
                         >
                           {(['fridge', 'freezer', 'pantry'] as StorageZone[]).map((z) => (
                             <option key={z} value={z}>
@@ -634,7 +527,7 @@ export const ShoppingView: React.FC<ShoppingViewProps> = ({
                               [s.id]: { ...ov, storeId: e.target.value },
                             }))
                           }
-                          className="w-full rounded-lg border border-stone-200 bg-white px-2 py-1.5 text-xs"
+                          className="w-full rounded-lg border border-stone-200 bg-white px-2.5 py-1.5 text-xs"
                         >
                           {stores.map((st) => (
                             <option key={st.id} value={st.id}>
