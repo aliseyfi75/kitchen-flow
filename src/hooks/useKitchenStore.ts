@@ -346,6 +346,63 @@ export function useKitchenStore() {
     [notify]
   );
 
+  const updateItemLearning = useCallback(
+    (
+      itemId: string,
+      patch: { avgDaysPerFullPack?: number; dailyBurnRate?: number; storeId?: string }
+    ) => {
+      const curr = stateRef.current;
+      const target = curr.items.find((i) => i.id === itemId);
+      if (!target) return;
+
+      setState((prev) => {
+        let nextShopping = prev.shoppingList;
+        const nextItems = prev.items.map((item) => {
+          if (item.id !== itemId) return item;
+          let avgDays = item.avgDaysPerFullPack;
+
+          if (patch.avgDaysPerFullPack !== undefined && Number.isFinite(patch.avgDaysPerFullPack)) {
+            avgDays = Number(Math.max(1, Math.min(180, patch.avgDaysPerFullPack)).toFixed(1));
+          } else if (patch.dailyBurnRate !== undefined && Number.isFinite(patch.dailyBurnRate)) {
+            const safeRate = Math.max(0.05, Math.min(50, patch.dailyBurnRate));
+            avgDays = Number(Math.max(1, Math.min(180, item.totalPortions / safeRate)).toFixed(1));
+          }
+
+          let defaultStoreId = item.defaultStoreId;
+          let storePurchaseCounts = item.storePurchaseCounts;
+          if (patch.storeId && patch.storeId !== defaultStoreId) {
+            defaultStoreId = patch.storeId;
+            const maxCount = Math.max(0, ...Object.values(item.storePurchaseCounts || {}));
+            storePurchaseCounts = {
+              ...(item.storePurchaseCounts || {}),
+              [patch.storeId]: maxCount + 1,
+            };
+            // Keep any active unchecked shopping entry in sync with the updated preferred store
+            nextShopping = nextShopping.map((s) =>
+              s.inventoryItemId === itemId && !s.checked ? { ...s, storeId: patch.storeId! } : s
+            );
+          }
+
+          return {
+            ...item,
+            avgDaysPerFullPack: avgDays,
+            defaultStoreId,
+            storePurchaseCounts,
+          };
+        });
+
+        return {
+          ...prev,
+          items: nextItems,
+          shoppingList: nextShopping,
+        };
+      });
+
+      notify(`Updated learned forecast for ${target.name}`, 'teal');
+    },
+    [notify]
+  );
+
   const syncForecastToShoppingList = useCallback(() => {
     const curr = stateRef.current;
     let addedCount = 0;
@@ -865,6 +922,7 @@ export function useKitchenStore() {
     quickRestock,
     saveItem,
     deleteItem,
+    updateItemLearning,
     syncForecastToShoppingList,
     addKitchenItemToShoppingManually,
     addShoppingItem,

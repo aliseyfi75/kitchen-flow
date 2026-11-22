@@ -236,6 +236,7 @@ export function App() {
             stores={state.stores}
             settings={state.settings}
             onUpdateSettings={store.updateSettings}
+            onUpdateItemLearning={store.updateItemLearning}
             onAddStore={store.addStore}
             onDeleteStore={store.deleteStore}
             onResetDemo={store.resetDemo}

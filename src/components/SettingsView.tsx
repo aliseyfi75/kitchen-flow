@@ -1,10 +1,11 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Activity,
   Globe,
   Lock,
   Plus,
   RotateCcw,
+  Search,
   ShieldCheck,
   Store as StoreIcon,
   Trash2,
@@ -19,11 +20,144 @@ interface SettingsViewProps {
   stores: Store[];
   settings: HouseholdSettings;
   onUpdateSettings: (patch: Partial<HouseholdSettings>) => void;
+  onUpdateItemLearning: (
+    itemId: string,
+    patch: { avgDaysPerFullPack?: number; dailyBurnRate?: number; storeId?: string }
+  ) => void;
   onAddStore: (store: Omit<Store, 'id'>) => void;
   onDeleteStore: (storeId: string) => void;
   onResetDemo: () => void;
   onOpenLoginPreview: () => void;
 }
+
+const LearnedRhythmRow: React.FC<{
+  item: InventoryItem;
+  stores: Store[];
+  shoppingDay: number;
+  onUpdate: (patch: { avgDaysPerFullPack?: number; dailyBurnRate?: number; storeId?: string }) => void;
+}> = ({ item, stores, shoppingDay, onUpdate }) => {
+  const fc = computeItemForecast(item, shoppingDay);
+  const [cycleDraft, setCycleDraft] = useState(String(item.avgDaysPerFullPack));
+  const [rateDraft, setRateDraft] = useState(String(fc.dailyBurnRate));
+
+  useEffect(() => {
+    setCycleDraft(String(item.avgDaysPerFullPack));
+    setRateDraft(String(fc.dailyBurnRate));
+  }, [item.avgDaysPerFullPack, fc.dailyBurnRate]);
+
+  const commitCycle = () => {
+    const parsed = parseFloat(cycleDraft);
+    if (Number.isFinite(parsed) && parsed > 0 && parsed !== item.avgDaysPerFullPack) {
+      onUpdate({ avgDaysPerFullPack: parsed });
+    } else {
+      setCycleDraft(String(item.avgDaysPerFullPack));
+    }
+  };
+
+  const commitRate = () => {
+    const parsed = parseFloat(rateDraft);
+    if (Number.isFinite(parsed) && parsed > 0 && Math.abs(parsed - fc.dailyBurnRate) >= 0.01) {
+      onUpdate({ dailyBurnRate: parsed });
+    } else {
+      setRateDraft(String(fc.dailyBurnRate));
+    }
+  };
+
+  const activeStore = stores.find((s) => s.id === fc.learnedStoreId);
+
+  return (
+    <tr className="hover:bg-stone-50/70">
+      <td className="py-2.5 pr-3">
+        <span dir="auto" className="font-semibold text-stone-900">
+          {item.name}
+        </span>{' '}
+        {item.alias && (
+          <span dir="auto" className="text-stone-400">
+            ({item.alias})
+          </span>
+        )}
+        <div className="text-[10px] text-stone-400">
+          {item.remainingPortions}/{item.totalPortions} × {item.portionLabel}
+        </div>
+      </td>
+
+      <td className="py-2.5 px-2">
+        <div className="inline-flex items-center gap-1">
+          <input
+            type="number"
+            step="0.5"
+            min="1"
+            max="180"
+            value={cycleDraft}
+            onChange={(e) => setCycleDraft(e.target.value)}
+            onBlur={commitCycle}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.currentTarget.blur();
+              }
+            }}
+            aria-label={`Learned cycle days for ${item.name}`}
+            className="w-16 rounded-lg border border-stone-200 bg-white px-2 py-1 text-xs font-semibold text-stone-800 focus:outline-none focus:ring-2 focus:ring-teal-500"
+          />
+          <span className="text-[11px] text-stone-500 whitespace-nowrap">d / pack</span>
+        </div>
+      </td>
+
+      <td className="py-2.5 px-2">
+        <div className="inline-flex items-center gap-1">
+          <input
+            type="number"
+            step="0.1"
+            min="0.05"
+            max="50"
+            value={rateDraft}
+            onChange={(e) => setRateDraft(e.target.value)}
+            onBlur={commitRate}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.currentTarget.blur();
+              }
+            }}
+            aria-label={`Burn rate for ${item.name}`}
+            className="w-16 rounded-lg border border-stone-200 bg-white px-2 py-1 text-xs font-semibold text-teal-800 focus:outline-none focus:ring-2 focus:ring-teal-500"
+          />
+          <span className="text-[11px] text-stone-500 whitespace-nowrap">/ day</span>
+        </div>
+      </td>
+
+      <td className="py-2.5 px-2">
+        <div className="inline-flex items-center gap-1.5">
+          {activeStore && (
+            <span
+              className="w-2.5 h-2.5 rounded-full shrink-0"
+              style={{ backgroundColor: activeStore.color }}
+            />
+          )}
+          <select
+            value={fc.learnedStoreId}
+            onChange={(e) => onUpdate({ storeId: e.target.value })}
+            aria-label={`Learned store for ${item.name}`}
+            className="rounded-lg border border-stone-200 bg-white px-2 py-1 text-xs font-medium text-stone-700 focus:outline-none focus:ring-2 focus:ring-teal-500"
+          >
+            {stores.map((st) => (
+              <option key={st.id} value={st.id}>
+                {st.name}
+              </option>
+            ))}
+          </select>
+        </div>
+      </td>
+
+      <td className="py-2.5 pl-3 text-right font-bold text-stone-800 whitespace-nowrap">
+        {fc.estimatedDaysLeft === 0 ? (
+          <span className="text-rose-600">Out</span>
+        ) : (
+          `${fc.estimatedDaysLeft}d`
+        )}
+      </td>
+    </tr>
+  );
+};
 
 const STORE_COLORS = ['#DC2626', '#2563EB', '#0F766E', '#D97706', '#7C3AED', '#DB2777'];
 
@@ -32,6 +166,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   stores,
   settings,
   onUpdateSettings,
+  onUpdateItemLearning,
   onAddStore,
   onDeleteStore,
   onResetDemo,
@@ -41,6 +176,15 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [storeName, setStoreName] = useState('');
   const [storeAlias, setStoreAlias] = useState('');
   const [storeColor, setStoreColor] = useState(STORE_COLORS[0]);
+  const [rhythmSearch, setRhythmSearch] = useState('');
+
+  const filteredRhythmItems = useMemo(() => {
+    const q = rhythmSearch.trim().toLowerCase();
+    if (!q) return items;
+    return items.filter((i) =>
+      `${i.name} ${i.alias}`.toLowerCase().includes(q)
+    );
+  }, [items, rhythmSearch]);
 
   const handleAddStore = (e: React.FormEvent) => {
     e.preventDefault();
@@ -295,14 +439,28 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         </form>
       </div>
 
-      {/* Learned Consumption Rhythm Table */}
+      {/* Learned Consumption Rhythm Table — Inline Editable */}
       <div className="rounded-3xl border border-stone-200 bg-white p-5 space-y-3 shadow-2xs">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Activity className="w-5 h-5 text-teal-700" />
-            <h3 className="font-bold text-stone-900">{t(lang, 'velocityInsights')}</h3>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div>
+            <div className="flex items-center gap-2">
+              <Activity className="w-5 h-5 text-teal-700" />
+              <h3 className="font-bold text-stone-900">{t(lang, 'velocityInsights')}</h3>
+            </div>
+            <p className="text-[11px] text-stone-500 mt-0.5">
+              Edit cycle days, daily burn rate, or preferred store inline — everything stays synced automatically.
+            </p>
           </div>
-          <span className="text-xs text-stone-400">EMA Adaptive Model</span>
+          <div className="relative sm:w-56">
+            <Search className="w-3.5 h-3.5 text-stone-400 absolute top-1/2 -translate-y-1/2 left-2.5 pointer-events-none" />
+            <input
+              dir="auto"
+              value={rhythmSearch}
+              onChange={(e) => setRhythmSearch(e.target.value)}
+              placeholder="Filter items..."
+              className="w-full rounded-xl border border-stone-200 pl-8 pr-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-teal-500"
+            />
+          </div>
         </div>
 
         <div className="overflow-x-auto">
@@ -310,54 +468,22 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             <thead>
               <tr className="border-b border-stone-100 text-stone-500">
                 <th className="py-2 pr-3 font-semibold">Item</th>
-                <th className="py-2 px-3 font-semibold">Learned Cycle</th>
-                <th className="py-2 px-3 font-semibold">Burn Rate</th>
-                <th className="py-2 px-3 font-semibold">Learned Store</th>
-                <th className="py-2 pl-3 font-semibold text-right">Est. Days Left</th>
+                <th className="py-2 px-2 font-semibold">Learned Cycle</th>
+                <th className="py-2 px-2 font-semibold">Burn Rate</th>
+                <th className="py-2 px-2 font-semibold">Learned Store</th>
+                <th className="py-2 pl-3 font-semibold text-right">Est. Left</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-stone-100">
-              {items.map((item) => {
-                const fc = computeItemForecast(item, settings.shoppingDay);
-                const st = stores.find((s) => s.id === fc.learnedStoreId);
-                return (
-                  <tr key={item.id} className="hover:bg-stone-50/70">
-                    <td className="py-2.5 pr-3">
-                      <span dir="auto" className="font-semibold text-stone-900">
-                        {item.name}
-                      </span>{' '}
-                      {item.alias && (
-                        <span dir="auto" className="text-stone-400">
-                          ({item.alias})
-                        </span>
-                      )}
-                    </td>
-                    <td className="py-2.5 px-3 text-stone-600">
-                      ~{item.avgDaysPerFullPack}d / pack{' '}
-                      <span className="text-stone-400">({item.cycleCount} cycles)</span>
-                    </td>
-                    <td className="py-2.5 px-3 text-stone-600">{fc.dailyBurnRate} portions/day</td>
-                    <td className="py-2.5 px-3">
-                      {st && (
-                        <span className="inline-flex items-center gap-1.5 font-medium text-stone-700">
-                          <span
-                            className="w-2 h-2 rounded-full"
-                            style={{ backgroundColor: st.color }}
-                          />
-                          {st.name}
-                        </span>
-                      )}
-                    </td>
-                    <td className="py-2.5 pl-3 text-right font-bold text-stone-800">
-                      {fc.estimatedDaysLeft === 0 ? (
-                        <span className="text-rose-600">Out</span>
-                      ) : (
-                        `${fc.estimatedDaysLeft}d`
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
+              {filteredRhythmItems.map((item) => (
+                <LearnedRhythmRow
+                  key={item.id}
+                  item={item}
+                  stores={stores}
+                  shoppingDay={settings.shoppingDay}
+                  onUpdate={(patch) => onUpdateItemLearning(item.id, patch)}
+                />
+              ))}
             </tbody>
           </table>
         </div>
