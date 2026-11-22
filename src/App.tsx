@@ -2,10 +2,12 @@ import React, { useEffect, useState } from 'react';
 import {
   ChefHat,
   Globe,
+  Layers,
   Lock,
   Refrigerator,
   Settings,
   ShoppingCart,
+  Sparkles,
 } from 'lucide-react';
 import { useKitchenStore } from './hooks/useKitchenStore';
 import { t } from './i18n/translations';
@@ -14,6 +16,7 @@ import { ShoppingView } from './components/ShoppingView';
 import { MealPlannerView } from './components/MealPlannerView';
 import { SettingsView } from './components/SettingsView';
 import { LoginGateModal } from './components/LoginGateModal';
+import { ReceiptScanModal } from './components/ReceiptScanModal';
 
 type TabId = 'kitchen' | 'shopping' | 'meals' | 'settings';
 
@@ -21,9 +24,11 @@ export function App() {
   const store = useKitchenStore();
   const { state, toast } = store;
   const lang = state.settings.language;
+  const uiMode = state.settings.uiMode;
 
   const [activeTab, setActiveTab] = useState<TabId>('kitchen');
   const [showLoginPreview, setShowLoginPreview] = useState(false);
+  const [showReceiptScanner, setShowReceiptScanner] = useState(false);
 
   useEffect(() => {
     document.documentElement.dir = lang === 'fa' ? 'rtl' : 'ltr';
@@ -47,26 +52,18 @@ export function App() {
   ];
 
   return (
-    <div className="min-h-screen bg-[#FAF9F6] text-stone-900 pb-24 sm:pb-10">
+    <div className="min-h-screen bg-[#FAF9F6] text-stone-900 pb-24 lg:pb-10">
       {/* Top Header */}
       <header className="sticky top-0 z-30 bg-[#FAF9F6]/90 backdrop-blur-md border-b border-stone-200/80">
-        <div className="max-w-5xl mx-auto px-4 h-16 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-xl bg-teal-700 text-white flex items-center justify-center shadow-xs font-bold">
+        <div className="max-w-5xl mx-auto px-3 sm:px-4 h-16 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-9 h-9 rounded-xl bg-teal-700 text-white flex items-center justify-center shadow-xs font-bold shrink-0">
               KF
             </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h1 className="font-bold text-base sm:text-lg tracking-tight text-stone-900 whitespace-nowrap">
-                  {t(lang, 'appName')}
-                </h1>
-                <span className="hidden lg:inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-teal-100 text-teal-800 whitespace-nowrap">
-                  {t(lang, 'demoMode')}
-                </span>
-              </div>
-              <p className="text-[11px] text-stone-500 hidden lg:block whitespace-nowrap">
-                {t(lang, 'tagline')}
-              </p>
+            <div className="min-w-0">
+              <h1 className="font-bold text-base sm:text-lg tracking-tight text-stone-900 whitespace-nowrap">
+                {t(lang, 'appName')}
+              </h1>
             </div>
           </div>
 
@@ -101,8 +98,42 @@ export function App() {
             })}
           </nav>
 
-          {/* Header Controls */}
-          <div className="flex items-center gap-1.5">
+          {/* Header Controls: Simple / Detailed Toggle + EN/FA + Login Gate */}
+          <div className="flex items-center gap-1.5 shrink-0">
+            {/* Simple / Detailed Mode Switch */}
+            <div
+              className="inline-flex items-center rounded-xl border border-stone-200 bg-white p-0.5 shadow-2xs"
+              role="group"
+              aria-label="Simple or Detailed view mode"
+            >
+              <button
+                type="button"
+                onClick={() => store.updateSettings({ uiMode: 'simple' })}
+                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold transition whitespace-nowrap ${
+                  uiMode === 'simple'
+                    ? 'bg-teal-700 text-white shadow-2xs'
+                    : 'text-stone-500 hover:text-stone-800'
+                }`}
+                title="Simple mode — quick everyday logging, zero clutter"
+              >
+                <Sparkles className="w-3 h-3" />
+                {t(lang, 'simpleMode')}
+              </button>
+              <button
+                type="button"
+                onClick={() => store.updateSettings({ uiMode: 'detailed' })}
+                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold transition whitespace-nowrap ${
+                  uiMode === 'detailed'
+                    ? 'bg-stone-900 text-white shadow-2xs'
+                    : 'text-stone-500 hover:text-stone-800'
+                }`}
+                title="Detailed mode — nutrition facts, micronutrients, label scanner & analytics"
+              >
+                <Layers className="w-3 h-3" />
+                {t(lang, 'detailedMode')}
+              </button>
+            </div>
+
             <button
               type="button"
               onClick={() =>
@@ -136,12 +167,22 @@ export function App() {
             stores={state.stores}
             shoppingDay={state.settings.shoppingDay}
             lang={lang}
+            uiMode={uiMode}
+            eatingMode={state.settings.eatingMode}
+            guestCount={state.settings.guestCount}
+            onChangeEatingMode={(eatingMode, guestCount) =>
+              store.updateSettings({
+                eatingMode,
+                ...(guestCount !== undefined ? { guestCount } : {}),
+              })
+            }
             onUsePortion={store.usePortion}
             onSetLevel={store.setContinuousLevel}
             onMarkFinished={store.markFinished}
             onQuickRestock={store.quickRestock}
             onSaveItem={store.saveItem}
             onDeleteItem={store.deleteItem}
+            onOpenReceiptScanner={() => setShowReceiptScanner(true)}
           />
         )}
 
@@ -152,7 +193,9 @@ export function App() {
             shoppingList={state.shoppingList}
             shoppingDay={state.settings.shoppingDay}
             lang={lang}
+            uiMode={uiMode}
             onSyncForecast={store.syncForecastToShoppingList}
+            onOpenReceiptScanner={() => setShowReceiptScanner(true)}
             onAddShoppingItem={store.addShoppingItem}
             onToggleChecked={store.toggleShoppingChecked}
             onUpdateShoppingItem={store.updateShoppingItem}
@@ -168,9 +211,12 @@ export function App() {
             weeklyPlan={state.weeklyPlan}
             defaultTools={state.settings.defaultTools}
             dailyProteinTarget={state.settings.dailyProteinTarget}
+            dailySugarLimit={state.settings.dailySugarLimit}
             shoppingDay={state.settings.shoppingDay}
             lang={lang}
+            uiMode={uiMode}
             onSetWeeklyPlan={store.setWeeklyPlan}
+            onUpdateMealServings={store.updatePlannedMealServings}
             onMarkMealCooked={store.markMealCooked}
             onAddRecipe={store.addRecipe}
             onToggleFavorite={store.toggleFavoriteRecipe}
@@ -245,6 +291,16 @@ export function App() {
             store.updateSettings({ activeUser: user });
             store.notify(`Signed in as ${user} (Local Demo)`, 'teal');
           }}
+        />
+      )}
+
+      {showReceiptScanner && (
+        <ReceiptScanModal
+          items={state.items}
+          stores={state.stores}
+          lang={lang}
+          onClose={() => setShowReceiptScanner(false)}
+          onApplyReceipt={store.applyReceiptItems}
         />
       )}
     </div>

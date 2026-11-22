@@ -1,7 +1,7 @@
 import { KitchenState } from '../types/kitchen';
 import { createSeedState } from '../data/seedData';
 
-const STORAGE_KEY = 'kitchenflow_state_v1';
+const STORAGE_KEY = 'kitchenflow_state_v2';
 
 /**
  * Repository abstraction so Phase 2 can swap LocalStorageKitchenRepository
@@ -23,12 +23,24 @@ export class LocalStorageKitchenRepository implements KitchenRepository {
         return seed;
       }
       const parsed = JSON.parse(raw) as KitchenState;
+      const defaults = createSeedState();
       if (!parsed.items || !parsed.stores || !parsed.settings) {
-        const seed = createSeedState();
-        this.save(seed);
-        return seed;
+        this.save(defaults);
+        return defaults;
       }
-      return parsed;
+      // Graceful forward-compatibility merge for new settings/fields
+      return {
+        ...defaults,
+        ...parsed,
+        settings: {
+          ...defaults.settings,
+          ...parsed.settings,
+        },
+        weeklyPlan: (parsed.weeklyPlan || []).map((m) => ({
+          ...m,
+          servings: m.servings ?? (m.slot === 'lunch' ? 1 : 2),
+        })),
+      };
     } catch {
       const seed = createSeedState();
       this.save(seed);

@@ -154,19 +154,34 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
           <div className="rounded-2xl bg-stone-50 border border-stone-200/80 p-3">
             <label className="block text-[11px] font-semibold text-stone-500 mb-1.5">
-              Daily Protein Goal (g/person)
+              Protein Goal / Sugar Limit (g)
             </label>
-            <input
-              type="number"
-              min={60}
-              max={250}
-              step={5}
-              value={settings.dailyProteinTarget}
-              onChange={(e) =>
-                onUpdateSettings({ dailyProteinTarget: Math.max(60, Number(e.target.value) || 120) })
-              }
-              className="w-full rounded-lg border border-stone-200 bg-white px-2.5 py-1.5 text-xs font-bold text-indigo-700"
-            />
+            <div className="grid grid-cols-2 gap-1.5">
+              <input
+                type="number"
+                min={60}
+                max={250}
+                step={5}
+                value={settings.dailyProteinTarget}
+                onChange={(e) =>
+                  onUpdateSettings({ dailyProteinTarget: Math.max(60, Number(e.target.value) || 120) })
+                }
+                title="Daily protein goal (g)"
+                className="w-full rounded-lg border border-stone-200 bg-white px-2 py-1.5 text-xs font-bold text-indigo-700"
+              />
+              <input
+                type="number"
+                min={10}
+                max={100}
+                step={2}
+                value={settings.dailySugarLimit}
+                onChange={(e) =>
+                  onUpdateSettings({ dailySugarLimit: Math.max(10, Number(e.target.value) || 36) })
+                }
+                title="Daily sugar limit (g)"
+                className="w-full rounded-lg border border-stone-200 bg-white px-2 py-1.5 text-xs font-bold text-rose-700"
+              />
+            </div>
           </div>
         </div>
 

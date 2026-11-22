@@ -194,6 +194,7 @@ export function generateSmartWeeklyPlan(
         dayLabel: dayNames[d % 7],
         slot,
         recipeId: pick.recipe.id,
+        servings: slot === 'lunch' ? 1 : 2, // Lunch defaults to Solo (1x), Dinner to Together (2x) — 1-tap editable!
         cooked: false,
         source: pick.recipe.isFavorite ? 'library' : 'ai_suggested',
         reasonNote: pick.reasonNote,

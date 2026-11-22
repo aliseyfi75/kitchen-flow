@@ -4,6 +4,7 @@ import {
   CheckCircle2,
   PackageCheck,
   Plus,
+  Receipt,
   ShoppingBag,
   Sparkles,
   Store as StoreIcon,
@@ -16,6 +17,7 @@ import {
   StorageZone,
   Store,
   UILanguage,
+  UIMode,
 } from '../types/kitchen';
 import { computeItemForecast, formatShoppingDayName } from '../utils/forecasting';
 import { t, ZONE_META } from '../i18n/translations';
@@ -26,7 +28,9 @@ interface ShoppingViewProps {
   shoppingList: ShoppingItem[];
   shoppingDay: number;
   lang: UILanguage;
+  uiMode: UIMode;
   onSyncForecast: () => void;
+  onOpenReceiptScanner: () => void;
   onAddShoppingItem: (entry: Omit<ShoppingItem, 'id' | 'addedAt' | 'checked'>) => void;
   onToggleChecked: (id: string) => void;
   onUpdateShoppingItem: (id: string, patch: Partial<ShoppingItem>) => void;
@@ -53,13 +57,16 @@ export const ShoppingView: React.FC<ShoppingViewProps> = ({
   shoppingList,
   shoppingDay,
   lang,
+  uiMode,
   onSyncForecast,
+  onOpenReceiptScanner,
   onAddShoppingItem,
   onToggleChecked,
   onUpdateShoppingItem,
   onRemoveShoppingItem,
   onCompleteTrip,
 }) => {
+  const isDetailed = uiMode === 'detailed';
   const [showAddForm, setShowAddForm] = useState(false);
   const [showRestockModal, setShowRestockModal] = useState(false);
 
@@ -182,6 +189,14 @@ export const ShoppingView: React.FC<ShoppingViewProps> = ({
           <div className="flex flex-wrap gap-2 shrink-0">
             <button
               type="button"
+              onClick={onOpenReceiptScanner}
+              className="inline-flex items-center gap-1.5 rounded-xl bg-white text-teal-900 hover:bg-teal-50 px-3.5 py-2 text-xs font-bold shadow-xs transition"
+            >
+              <Receipt className="w-4 h-4" />
+              {t(lang, 'scanReceipt')}
+            </button>
+            <button
+              type="button"
               onClick={onSyncForecast}
               className="inline-flex items-center gap-1.5 rounded-xl bg-white/15 hover:bg-white/25 backdrop-blur px-3.5 py-2 text-xs font-semibold text-white transition"
             >
@@ -191,7 +206,7 @@ export const ShoppingView: React.FC<ShoppingViewProps> = ({
             <button
               type="button"
               onClick={() => setShowAddForm((v) => !v)}
-              className="inline-flex items-center gap-1.5 rounded-xl bg-white text-teal-900 hover:bg-teal-50 px-3.5 py-2 text-xs font-bold shadow-xs transition"
+              className="inline-flex items-center gap-1.5 rounded-xl bg-white/15 hover:bg-white/25 backdrop-blur px-3.5 py-2 text-xs font-semibold text-white transition"
             >
               <Plus className="w-4 h-4" />
               Add Item
@@ -474,35 +489,39 @@ export const ShoppingView: React.FC<ShoppingViewProps> = ({
                       </div>
 
                       <div className="flex items-center gap-1.5 shrink-0">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            onUpdateShoppingItem(s.id, {
-                              priority: s.priority === 'essential' ? 'optional' : 'essential',
-                            })
-                          }
-                          className={`px-2 py-1 rounded-lg text-[11px] font-semibold border transition ${
-                            s.priority === 'essential'
-                              ? 'bg-amber-50 text-amber-800 border-amber-200'
-                              : 'bg-stone-50 text-stone-500 border-stone-200'
-                          }`}
-                          title="Toggle Essential / Optional"
-                        >
-                          {s.priority === 'essential' ? t(lang, 'essential') : t(lang, 'optional')}
-                        </button>
+                        {isDetailed && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onUpdateShoppingItem(s.id, {
+                                  priority: s.priority === 'essential' ? 'optional' : 'essential',
+                                })
+                              }
+                              className={`px-2 py-1 rounded-lg text-[11px] font-semibold border transition ${
+                                s.priority === 'essential'
+                                  ? 'bg-amber-50 text-amber-800 border-amber-200'
+                                  : 'bg-stone-50 text-stone-500 border-stone-200'
+                              }`}
+                              title="Toggle Essential / Optional"
+                            >
+                              {s.priority === 'essential' ? t(lang, 'essential') : t(lang, 'optional')}
+                            </button>
 
-                        <select
-                          value={s.storeId}
-                          onChange={(e) => onUpdateShoppingItem(s.id, { storeId: e.target.value })}
-                          className="rounded-lg border border-stone-200 bg-white px-2 py-1 text-[11px] text-stone-600 max-w-[105px]"
-                          title="Move to another store"
-                        >
-                          {stores.map((st) => (
-                            <option key={st.id} value={st.id}>
-                              {st.name}
-                            </option>
-                          ))}
-                        </select>
+                            <select
+                              value={s.storeId}
+                              onChange={(e) => onUpdateShoppingItem(s.id, { storeId: e.target.value })}
+                              className="rounded-lg border border-stone-200 bg-white px-2 py-1 text-[11px] text-stone-600 max-w-[105px]"
+                              title="Move to another store"
+                            >
+                              {stores.map((st) => (
+                                <option key={st.id} value={st.id}>
+                                  {st.name}
+                                </option>
+                              ))}
+                            </select>
+                          </>
+                        )}
 
                         <button
                           type="button"

@@ -2,19 +2,31 @@ import React, { useMemo, useState } from 'react';
 import {
   AlertTriangle,
   Archive,
+  Camera,
   CheckCircle2,
   Clock,
   Edit3,
   Flame,
   Minus,
   Plus,
+  Receipt,
   RefreshCw,
   Search,
   Snowflake,
   Thermometer,
   Trash2,
+  User,
+  Users,
+  PartyPopper,
 } from 'lucide-react';
-import { InventoryItem, StorageZone, Store, UILanguage } from '../types/kitchen';
+import {
+  EatingMode,
+  InventoryItem,
+  StorageZone,
+  Store,
+  UILanguage,
+  UIMode,
+} from '../types/kitchen';
 import { computeItemForecast } from '../utils/forecasting';
 import { CATEGORY_META, t, ZONE_META } from '../i18n/translations';
 import { ItemModal } from './ItemModal';
@@ -24,12 +36,17 @@ interface KitchenViewProps {
   stores: Store[];
   shoppingDay: number;
   lang: UILanguage;
+  uiMode: UIMode;
+  eatingMode: EatingMode;
+  guestCount: number;
+  onChangeEatingMode: (mode: EatingMode, guestCount?: number) => void;
   onUsePortion: (itemId: string, amount?: number) => void;
   onSetLevel: (itemId: string, percent: number) => void;
   onMarkFinished: (itemId: string) => void;
   onQuickRestock: (itemId: string) => void;
   onSaveItem: (item: InventoryItem, isNew: boolean) => void;
   onDeleteItem: (itemId: string) => void;
+  onOpenReceiptScanner: () => void;
 }
 
 const ZONE_ICONS: Record<StorageZone, React.ReactNode> = {
@@ -43,17 +60,29 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
   stores,
   shoppingDay,
   lang,
+  uiMode,
+  eatingMode,
+  guestCount,
+  onChangeEatingMode,
   onUsePortion,
   onSetLevel,
   onMarkFinished,
   onQuickRestock,
   onSaveItem,
   onDeleteItem,
+  onOpenReceiptScanner,
 }) => {
   const [zoneFilter, setZoneFilter] = useState<'all' | StorageZone>('all');
   const [statusFilter, setStatusFilter] = useState<'all' | 'attention' | 'expiring'>('all');
   const [search, setSearch] = useState('');
-  const [editingItem, setEditingItem] = useState<InventoryItem | null | undefined>(undefined);
+  const [modalState, setModalState] = useState<{
+    item: InventoryItem | null;
+    initialTab: 'basics' | 'nutrition';
+  } | null>(null);
+
+  const isDetailed = uiMode === 'detailed';
+  const servingMultiplier =
+    eatingMode === 'solo' ? 1 : eatingMode === 'together' ? 2 : Math.max(3, guestCount);
 
   const storeMap = useMemo(() => new Map(stores.map((s) => [s.id, s])), [stores]);
 
@@ -102,7 +131,6 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
         return true;
       })
       .sort((a, b) => {
-        // Sort out / expiring / low items first for quick kitchen action
         const priority = (v: typeof a.forecast.verdict, exp: boolean) => {
           if (v === 'out') return 0;
           if (exp) return 1;
@@ -119,68 +147,141 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
   }, [enriched, zoneFilter, statusFilter, search, storeMap]);
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
+      {/* Who's Eating? Serving Multiplier Strip — Zero Mental Load */}
+      <div className="rounded-2xl border border-stone-200/90 bg-white px-3.5 py-2.5 shadow-2xs flex flex-wrap items-center justify-between gap-2.5">
+        <div className="flex items-center gap-2 text-xs font-semibold text-stone-700">
+          <Users className="w-4 h-4 text-teal-700" />
+          <span>{t(lang, 'whosEating')}</span>
+        </div>
+
+        <div className="flex items-center flex-wrap gap-1.5">
+          <button
+            type="button"
+            onClick={() => onChangeEatingMode('solo')}
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition ${
+              eatingMode === 'solo'
+                ? 'bg-teal-700 text-white shadow-2xs'
+                : 'bg-stone-100 text-stone-600 hover:bg-stone-200/70'
+            }`}
+          >
+            <User className="w-3.5 h-3.5" />
+            {t(lang, 'solo')}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => onChangeEatingMode('together')}
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition ${
+              eatingMode === 'together'
+                ? 'bg-teal-700 text-white shadow-2xs'
+                : 'bg-stone-100 text-stone-600 hover:bg-stone-200/70'
+            }`}
+          >
+            <Users className="w-3.5 h-3.5" />
+            {t(lang, 'together')}
+          </button>
+
+          <div
+            className={`inline-flex items-center rounded-xl transition ${
+              eatingMode === 'guests'
+                ? 'bg-indigo-700 text-white shadow-2xs'
+                : 'bg-stone-100 text-stone-600 hover:bg-stone-200/70'
+            }`}
+          >
+            <button
+              type="button"
+              onClick={() => onChangeEatingMode('guests', Math.max(3, guestCount))}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold"
+            >
+              <PartyPopper className="w-3.5 h-3.5" />
+              {t(lang, 'guests')} ({guestCount}×)
+            </button>
+            {eatingMode === 'guests' && (
+              <div className="flex items-center border-l border-white/20 px-1 gap-0.5">
+                <button
+                  type="button"
+                  onClick={() => onChangeEatingMode('guests', Math.max(3, guestCount - 1))}
+                  className="p-1 rounded hover:bg-white/15"
+                  aria-label="Decrease guests"
+                >
+                  <Minus className="w-3 h-3" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onChangeEatingMode('guests', Math.min(12, guestCount + 1))}
+                  className="p-1 rounded hover:bg-white/15"
+                  aria-label="Increase guests"
+                >
+                  <Plus className="w-3 h-3" />
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
       {/* Top KPI summary cards */}
-      <div className="grid grid-cols-3 gap-2.5 sm:gap-4">
+      <div className="grid grid-cols-3 gap-2.5 sm:gap-3.5">
         <button
           type="button"
           onClick={() => setStatusFilter('all')}
-          className={`rounded-2xl border p-3.5 text-left transition ${
+          className={`rounded-2xl border p-3 text-left transition ${
             statusFilter === 'all'
-              ? 'border-teal-600 bg-teal-50/70 shadow-xs'
+              ? 'border-teal-600 bg-teal-50/70 shadow-2xs'
               : 'border-stone-200/80 bg-white hover:border-stone-300'
           }`}
         >
           <div className="text-[11px] font-medium uppercase tracking-wider text-stone-500">
-            {lang === 'fa' ? 'کل اقلام' : 'Tracked Items'}
+            {lang === 'fa' ? 'کل اقلام' : 'Tracked'}
           </div>
-          <div className="mt-1 flex items-baseline gap-1.5">
-            <span className="text-2xl font-bold text-stone-900">{stats.total}</span>
-            <span className="text-xs text-stone-500">{lang === 'fa' ? 'قلم' : 'staples'}</span>
+          <div className="mt-0.5 flex items-baseline gap-1.5">
+            <span className="text-xl sm:text-2xl font-bold text-stone-900">{stats.total}</span>
+            <span className="text-xs text-stone-500">{lang === 'fa' ? 'قلم' : 'items'}</span>
           </div>
         </button>
 
         <button
           type="button"
           onClick={() => setStatusFilter(statusFilter === 'attention' ? 'all' : 'attention')}
-          className={`rounded-2xl border p-3.5 text-left transition ${
+          className={`rounded-2xl border p-3 text-left transition ${
             statusFilter === 'attention'
-              ? 'border-amber-500 bg-amber-50 shadow-xs'
+              ? 'border-amber-500 bg-amber-50 shadow-2xs'
               : 'border-stone-200/80 bg-white hover:border-stone-300'
           }`}
         >
           <div className="text-[11px] font-medium uppercase tracking-wider text-amber-700">
-            {lang === 'fa' ? 'نیاز این آخر هفته' : 'Need This Weekend'}
+            {lang === 'fa' ? 'نیاز آخر هفته' : 'Weekend Buy'}
           </div>
-          <div className="mt-1 flex items-baseline gap-1.5">
-            <span className="text-2xl font-bold text-amber-700">{stats.buyThisWeekend}</span>
-            <span className="text-xs text-amber-600">
-              {stats.outCount > 0 ? `(${stats.outCount} out)` : ''}
-            </span>
+          <div className="mt-0.5 flex items-baseline gap-1.5">
+            <span className="text-xl sm:text-2xl font-bold text-amber-700">{stats.buyThisWeekend}</span>
+            {stats.outCount > 0 && (
+              <span className="text-xs text-amber-600">({stats.outCount} out)</span>
+            )}
           </div>
         </button>
 
         <button
           type="button"
           onClick={() => setStatusFilter(statusFilter === 'expiring' ? 'all' : 'expiring')}
-          className={`rounded-2xl border p-3.5 text-left transition ${
+          className={`rounded-2xl border p-3 text-left transition ${
             statusFilter === 'expiring'
-              ? 'border-rose-500 bg-rose-50 shadow-xs'
+              ? 'border-rose-500 bg-rose-50 shadow-2xs'
               : 'border-stone-200/80 bg-white hover:border-stone-300'
           }`}
         >
           <div className="text-[11px] font-medium uppercase tracking-wider text-rose-700">
             {lang === 'fa' ? 'زود مصرف شود' : 'Use Soon'}
           </div>
-          <div className="mt-1 flex items-baseline gap-1.5">
-            <span className="text-2xl font-bold text-rose-600">{stats.expiringSoon}</span>
+          <div className="mt-0.5 flex items-baseline gap-1.5">
+            <span className="text-xl sm:text-2xl font-bold text-rose-600">{stats.expiringSoon}</span>
             <span className="text-xs text-rose-500">{lang === 'fa' ? 'تازه' : 'fresh'}</span>
           </div>
         </button>
       </div>
 
-      {/* Search + Zone Tabs + Add Button */}
-      <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center justify-between">
+      {/* Search + Quick Actions (Scan Receipt + Add Item) */}
+      <div className="flex flex-col sm:flex-row gap-2.5 items-stretch sm:items-center justify-between">
         <div className="relative flex-1">
           <Search className="w-4 h-4 text-stone-400 absolute top-1/2 -translate-y-1/2 left-3.5 pointer-events-none" />
           <input
@@ -192,14 +293,25 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
           />
         </div>
 
-        <button
-          type="button"
-          onClick={() => setEditingItem(null)}
-          className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-teal-700 hover:bg-teal-800 text-white px-4 py-2.5 text-sm font-semibold shadow-xs transition shrink-0"
-        >
-          <Plus className="w-4 h-4" />
-          {t(lang, 'addItem')}
-        </button>
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={onOpenReceiptScanner}
+            className="flex-1 sm:flex-none inline-flex items-center justify-center gap-1.5 rounded-xl bg-white border border-teal-200 hover:bg-teal-50 text-teal-800 px-3.5 py-2.5 text-xs sm:text-sm font-semibold shadow-2xs transition"
+          >
+            <Receipt className="w-4 h-4" />
+            {t(lang, 'scanReceipt')}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setModalState({ item: null, initialTab: 'basics' })}
+            className="flex-1 sm:flex-none inline-flex items-center justify-center gap-1.5 rounded-xl bg-teal-700 hover:bg-teal-800 text-white px-4 py-2.5 text-xs sm:text-sm font-semibold shadow-xs transition"
+          >
+            <Plus className="w-4 h-4" />
+            {t(lang, 'addItem')}
+          </button>
+        </div>
       </div>
 
       {/* Zone Pill Filter */}
@@ -212,7 +324,7 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
               key={z}
               type="button"
               onClick={() => setZoneFilter(z)}
-              className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full text-xs font-semibold transition shrink-0 ${
+              className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-semibold transition shrink-0 ${
                 active
                   ? 'bg-stone-900 text-white shadow-xs'
                   : 'bg-white border border-stone-200 text-stone-600 hover:bg-stone-50'
@@ -235,12 +347,13 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
       {/* Inventory Cards Grid */}
       {filtered.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-stone-300 bg-white p-10 text-center text-sm text-stone-500">
-          No matching items found. Try clearing your filter or add a new item.
+          No matching items found. Try clearing your filter or scan a receipt to add items.
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
           {filtered.map(({ item, forecast }) => {
             const store = storeMap.get(forecast.learnedStoreId);
+            const nut = item.nutrition;
             const barColor =
               forecast.stockState === 'critical'
                 ? 'bg-rose-500'
@@ -256,6 +369,19 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
                 : forecast.verdict === 'borderline'
                 ? { label: t(lang, 'borderline'), cls: 'bg-sky-50 text-sky-800 border-sky-200' }
                 : { label: t(lang, 'goodNextWeek'), cls: 'bg-emerald-50 text-emerald-800 border-emerald-200' };
+
+            const microChips: string[] = [];
+            if (nut?.micronutrients.omega3) microChips.push('Omega-3');
+            if ((nut?.micronutrients.vitaminDPct ?? 0) >= 15)
+              microChips.push(`Vit D ${nut!.micronutrients.vitaminDPct}%`);
+            if ((nut?.micronutrients.ironPct ?? 0) >= 10)
+              microChips.push(`Iron ${nut!.micronutrients.ironPct}%`);
+            if ((nut?.micronutrients.calciumPct ?? 0) >= 10)
+              microChips.push(`Calcium ${nut!.micronutrients.calciumPct}%`);
+            if ((nut?.micronutrients.vitaminCPct ?? 0) >= 20)
+              microChips.push(`Vit C ${nut!.micronutrients.vitaminCPct}%`);
+
+            const effectiveUseAmount = Math.min(servingMultiplier, item.remainingPortions);
 
             return (
               <div
@@ -284,13 +410,13 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
                         </span>
                       )}
                     </div>
-                    <div className="mt-1 flex items-center flex-wrap gap-x-2.5 gap-y-1 text-xs text-stone-500">
+
+                    {/* Metadata line — compact in Simple mode, full in Detailed mode */}
+                    <div className="mt-1 flex items-center flex-wrap gap-x-2 gap-y-1 text-xs text-stone-500">
                       <span className="inline-flex items-center gap-1 font-medium text-stone-600">
                         {ZONE_ICONS[item.zone]}
                         {ZONE_META[item.zone][lang]}
                       </span>
-                      <span>•</span>
-                      <span>{CATEGORY_META[item.category][lang]}</span>
                       {store && (
                         <>
                           <span>•</span>
@@ -303,27 +429,47 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
                           </span>
                         </>
                       )}
+                      {isDetailed && (
+                        <>
+                          <span>•</span>
+                          <span>{CATEGORY_META[item.category][lang]}</span>
+                        </>
+                      )}
                     </div>
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() => setEditingItem(item)}
-                    className="p-1.5 rounded-lg text-stone-400 hover:text-stone-700 hover:bg-stone-100 shrink-0"
-                    title="Edit item"
-                  >
-                    <Edit3 className="w-4 h-4" />
-                  </button>
+                  <div className="flex items-center gap-1 shrink-0">
+                    {isDetailed && (
+                      <button
+                        type="button"
+                        onClick={() => setModalState({ item, initialTab: 'nutrition' })}
+                        className="p-1.5 rounded-lg text-teal-700 hover:bg-teal-50"
+                        title="Scan / edit Nutrition Facts label"
+                      >
+                        <Camera className="w-4 h-4" />
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setModalState({ item, initialTab: 'basics' })}
+                      className="p-1.5 rounded-lg text-stone-400 hover:text-stone-700 hover:bg-stone-100"
+                      title="Edit item"
+                    >
+                      <Edit3 className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
 
-                {/* Portion progress + status badges */}
+                {/* Portion progress + status */}
                 <div className="space-y-2">
                   <div className="flex items-center justify-between text-xs">
                     <span className="font-semibold text-stone-800">
                       {item.remainingPortions} / {item.totalPortions}{' '}
                       <span className="font-normal text-stone-500">× {item.portionLabel}</span>
                     </span>
-                    <span className="font-medium text-stone-500">{forecast.stockPercent}%</span>
+                    <span className="font-medium text-stone-500">
+                      {item.remainingPortions > 0 ? `~${forecast.estimatedDaysLeft}d` : '0%'}
+                    </span>
                   </div>
 
                   <div className="h-2 w-full rounded-full bg-stone-100 overflow-hidden">
@@ -333,7 +479,7 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
                     />
                   </div>
 
-                  {/* Quick level taps for continuous items (milk, spinach, rice) */}
+                  {/* Continuous quick level taps */}
                   {item.trackingMode === 'continuous' && (
                     <div className="flex items-center gap-1 pt-0.5">
                       {[100, 75, 50, 25, 0].map((pct) => {
@@ -356,7 +502,7 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
                     </div>
                   )}
 
-                  {/* Badges Row */}
+                  {/* Status Pills */}
                   <div className="flex items-center flex-wrap gap-1.5 pt-0.5">
                     <span
                       className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold border ${verdictBadge.cls}`}
@@ -369,20 +515,6 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
                       {verdictBadge.label}
                     </span>
 
-                    {item.remainingPortions > 0 && (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-stone-100 text-stone-700">
-                        ~{forecast.estimatedDaysLeft}{' '}
-                        {forecast.estimatedDaysLeft === 1 ? t(lang, 'dayLeft') : t(lang, 'daysLeft')}
-                      </span>
-                    )}
-
-                    {item.proteinPerPortion > 0 && (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-indigo-50 text-indigo-700">
-                        <Flame className="w-3 h-3" />
-                        {item.proteinPerPortion}g protein
-                      </span>
-                    )}
-
                     {forecast.expiringSoon && forecast.daysUntilExpiry !== null && (
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-rose-50 text-rose-700 border border-rose-200">
                         <AlertTriangle className="w-3 h-3" />
@@ -391,21 +523,103 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
                           : `${t(lang, 'expiringSoon')} (${forecast.daysUntilExpiry}d)`}
                       </span>
                     )}
+
+                    {/* In Simple Mode, only show protein badge if it's a meaningful protein source */}
+                    {!isDetailed && item.proteinPerPortion >= 12 && (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-indigo-50 text-indigo-700">
+                        <Flame className="w-3 h-3" />
+                        {item.proteinPerPortion}g pro
+                      </span>
+                    )}
                   </div>
+
+                  {/* Detailed Mode: Full Nutrition & Micronutrient Strip */}
+                  {isDetailed && (
+                    <div className="rounded-xl bg-stone-50/90 border border-stone-200/70 p-2.5 space-y-1.5">
+                      {nut ? (
+                        <>
+                          <div className="flex items-center flex-wrap gap-1.5 text-[11px]">
+                            <span className="font-bold text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded">
+                              {nut.protein}g Pro
+                            </span>
+                            <span
+                              className={`font-semibold px-1.5 py-0.5 rounded ${
+                                nut.sugar >= 10
+                                  ? 'bg-rose-100 text-rose-800'
+                                  : nut.sugar >= 5
+                                  ? 'bg-amber-100 text-amber-800'
+                                  : 'bg-emerald-50 text-emerald-800'
+                              }`}
+                            >
+                              {nut.sugar}g Sugar
+                            </span>
+                            {nut.fiber > 0 && (
+                              <span className="font-medium text-teal-800 bg-teal-50 px-1.5 py-0.5 rounded">
+                                {nut.fiber}g Fiber
+                              </span>
+                            )}
+                            <span className="text-stone-500 font-medium">{nut.calories} kcal</span>
+                          </div>
+                          {microChips.length > 0 && (
+                            <div className="flex items-center flex-wrap gap-1 text-[10px] text-stone-600">
+                              {microChips.slice(0, 4).map((chip) => (
+                                <span
+                                  key={chip}
+                                  className="px-1.5 py-0.5 rounded bg-white border border-stone-200 font-medium"
+                                >
+                                  {chip}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setModalState({ item, initialTab: 'nutrition' })}
+                          className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-teal-700 hover:text-teal-900"
+                        >
+                          <Camera className="w-3.5 h-3.5" />
+                          Scan nutrition label to track protein, sugar & micronutrients
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
 
-                {/* Action Buttons */}
+                {/* Action Buttons — Scaled to Solo / Together / Guests! */}
                 <div className="flex items-center gap-2 pt-2 border-t border-stone-100">
                   {item.remainingPortions > 0 ? (
                     <>
                       <button
                         type="button"
-                        onClick={() => onUsePortion(item.id, 1)}
-                        className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-xl bg-teal-700 hover:bg-teal-800 active:scale-[0.98] text-white py-2 px-3 text-xs font-semibold transition"
+                        onClick={() => onUsePortion(item.id, effectiveUseAmount)}
+                        className={`flex-1 inline-flex items-center justify-center gap-1.5 rounded-xl active:scale-[0.98] text-white py-2 px-3 text-xs font-semibold transition ${
+                          eatingMode === 'guests'
+                            ? 'bg-indigo-700 hover:bg-indigo-800'
+                            : 'bg-teal-700 hover:bg-teal-800'
+                        }`}
                       >
                         <Minus className="w-3.5 h-3.5" />
-                        {t(lang, 'usePortion')}
+                        {effectiveUseAmount === 1
+                          ? `${t(lang, 'usePortion')} 1`
+                          : `${t(lang, 'usePortion')} ${effectiveUseAmount} (${
+                              eatingMode === 'together' ? '2×' : `${servingMultiplier}×`
+                            })`}
                       </button>
+
+                      {/* Quick -1 fallback when in Together (2x) or Guests mode */}
+                      {servingMultiplier > 1 && item.remainingPortions > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => onUsePortion(item.id, 1)}
+                          className="inline-flex items-center justify-center rounded-xl bg-stone-100 hover:bg-stone-200 text-stone-700 py-2 px-2.5 text-xs font-bold transition"
+                          title="Deduct just 1 portion"
+                        >
+                          -1
+                        </button>
+                      )}
+
                       <button
                         type="button"
                         onClick={() => onMarkFinished(item.id)}
@@ -433,12 +647,13 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
         </div>
       )}
 
-      {editingItem !== undefined && (
+      {modalState && (
         <ItemModal
-          item={editingItem}
+          item={modalState.item}
+          initialTab={modalState.initialTab}
           stores={stores}
           lang={lang}
-          onClose={() => setEditingItem(undefined)}
+          onClose={() => setModalState(null)}
           onSave={onSaveItem}
           onDelete={onDeleteItem}
         />

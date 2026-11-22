@@ -5,6 +5,7 @@ import {
   KitchenState,
   MealRecipe,
   PlannedMeal,
+  ReceiptParsedItem,
   ShoppingItem,
   ShoppingReason,
   StorageZone,
@@ -544,14 +545,29 @@ export function useKitchenStore() {
     setState((prev) => ({ ...prev, weeklyPlan: plan }));
   }, []);
 
+  const updatePlannedMealServings = useCallback((plannedMealId: string, servings: number) => {
+    setState((prev) => ({
+      ...prev,
+      weeklyPlan: prev.weeklyPlan.map((m) =>
+        m.id === plannedMealId ? { ...m, servings: Math.max(1, Math.min(12, servings)) } : m
+      ),
+    }));
+  }, []);
+
   const markMealCooked = useCallback(
     (plannedMealId: string, deductFromInventory: boolean) => {
-      let cookedTitle = '';
+      const curr = stateRef.current;
+      const targetMeal = curr.weeklyPlan.find((m) => m.id === plannedMealId);
+      if (!targetMeal) return;
+      const targetRecipe = curr.recipes.find((r) => r.id === targetMeal.recipeId);
+      const cookedTitle = targetRecipe?.name || 'Meal';
+      const servingCount = targetMeal.servings || 1;
+
       setState((prev) => {
         const meal = prev.weeklyPlan.find((m) => m.id === plannedMealId);
         if (!meal) return prev;
         const recipe = prev.recipes.find((r) => r.id === meal.recipeId);
-        cookedTitle = recipe?.name || 'Meal';
+        const mult = meal.servings || 1;
 
         let nextItems = prev.items;
         let nextShopping = prev.shoppingList;
@@ -561,7 +577,8 @@ export function useKitchenStore() {
           nextItems = prev.items.map((item) => {
             const ing = recipe.ingredients.find((x) => x.itemId === item.id);
             if (!ing) return item;
-            const nextRem = Math.max(0, Number((item.remainingPortions - ing.portionsNeeded).toFixed(1)));
+            const totalNeeded = Number((ing.portionsNeeded * mult).toFixed(1));
+            const nextRem = Math.max(0, Number((item.remainingPortions - totalNeeded).toFixed(1)));
             if (nextRem === 0 && item.autoAddOnEmpty) {
               const res = ensureOnShoppingList(nextShopping, item, 'finished', 'essential');
               nextShopping = res.list;
@@ -581,10 +598,102 @@ export function useKitchenStore() {
       });
       notify(
         deductFromInventory
-          ? `Cooked "${cookedTitle}" & deducted ingredients from kitchen!`
+          ? `Cooked "${cookedTitle}" (${servingCount}× servings) & deducted from kitchen!`
           : `Updated "${cookedTitle}" status`,
         'teal'
       );
+    },
+    [notify]
+  );
+
+  const applyReceiptItems = useCallback(
+    (storeId: string, parsedItems: ReceiptParsedItem[]) => {
+      if (parsedItems.length === 0) return;
+      const curr = stateRef.current;
+      const storeName = curr.stores.find((s) => s.id === storeId)?.name ?? 'Store';
+
+      setState((prev) => {
+        const nowIso = new Date().toISOString();
+        let nextItems = [...prev.items];
+        const matchedIds = new Set<string>();
+        const newEvents = [...prev.events];
+
+        for (const line of parsedItems) {
+          if (line.matchedItemId) {
+            matchedIds.add(line.matchedItemId);
+            nextItems = nextItems.map((item) => {
+              if (item.id !== line.matchedItemId) return item;
+              const counts = { ...(item.storePurchaseCounts || {}) };
+              counts[storeId] = (counts[storeId] || 0) + 1;
+              return {
+                ...item,
+                remainingPortions: Number((item.remainingPortions + line.portionsToAdd).toFixed(1)),
+                totalPortions: Math.max(item.totalPortions, line.portionsToAdd),
+                zone: line.zone,
+                defaultStoreId: storeId,
+                storePurchaseCounts: counts,
+                lastRestockedAt: nowIso,
+              };
+            });
+            newEvents.unshift({
+              id: `ev-${Date.now()}-${line.id}`,
+              itemId: line.matchedItemId,
+              type: 'restock',
+              deltaPortions: line.portionsToAdd,
+              storeId,
+              timestamp: nowIso,
+              actor: prev.settings.activeUser,
+            });
+          } else {
+            const newId = `item-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+            nextItems.unshift({
+              id: newId,
+              name: line.name.trim(),
+              alias: line.alias.trim(),
+              category: line.category,
+              zone: line.zone,
+              trackingMode: 'portioned',
+              totalPortions: line.portionsToAdd,
+              remainingPortions: line.portionsToAdd,
+              portionLabel: line.portionLabel || '1 portion',
+              packDescription: line.packDescription || `${line.portionsToAdd} portions`,
+              proteinPerPortion: 0,
+              defaultStoreId: storeId,
+              storePurchaseCounts: { [storeId]: 1 },
+              avgDaysPerFullPack: 10,
+              cycleCount: 0,
+              lastRestockedAt: nowIso,
+              autoAddOnEmpty: true,
+            });
+            newEvents.unshift({
+              id: `ev-${Date.now()}-${newId}`,
+              itemId: newId,
+              type: 'restock',
+              deltaPortions: line.portionsToAdd,
+              storeId,
+              timestamp: nowIso,
+              actor: prev.settings.activeUser,
+            });
+          }
+        }
+
+        // Clear any matching items from shopping list
+        const parsedNames = new Set(parsedItems.map((p) => p.name.toLowerCase()));
+        const nextShopping = prev.shoppingList.filter((s) => {
+          if (s.inventoryItemId && matchedIds.has(s.inventoryItemId)) return false;
+          if (parsedNames.has(s.name.toLowerCase())) return false;
+          return true;
+        });
+
+        return {
+          ...prev,
+          items: nextItems,
+          shoppingList: nextShopping,
+          events: newEvents.slice(0, 200),
+        };
+      });
+
+      notify(`Receipt scanned! Restocked ${parsedItems.length} item(s) from ${storeName}.`, 'teal');
     },
     [notify]
   );
@@ -617,11 +726,13 @@ export function useKitchenStore() {
     updateShoppingItem,
     removeShoppingItem,
     completeShoppingTrip,
+    applyReceiptItems,
     addStore,
     deleteStore,
     addRecipe,
     toggleFavoriteRecipe,
     setWeeklyPlan,
+    updatePlannedMealServings,
     markMealCooked,
     updateSettings,
     resetDemo,

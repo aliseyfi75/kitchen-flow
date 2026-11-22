@@ -24,6 +24,34 @@ export type EffortLevel = 'exhausted' | 'normal' | 'batch_prep';
 
 export type UILanguage = 'en' | 'fa';
 
+export type UIMode = 'simple' | 'detailed';
+
+export type EatingMode = 'solo' | 'together' | 'guests';
+
+export interface MicronutrientProfile {
+  ironPct?: number; // % Daily Value per portion
+  calciumPct?: number; // % DV
+  potassiumPct?: number; // % DV
+  vitaminDPct?: number; // % DV
+  vitaminCPct?: number; // % DV
+  omega3?: boolean;
+  highlights?: string[]; // e.g. ['B12', 'Folate', 'Magnesium']
+}
+
+export interface NutritionFacts {
+  servingSizeLabel?: string;
+  calories: number;
+  protein: number; // g
+  sugar: number; // g
+  fiber: number; // g
+  carbs: number; // g
+  fat: number; // g
+  sodiumMg?: number;
+  micronutrients: MicronutrientProfile;
+  source?: 'manual' | 'label_scan' | 'estimated';
+  lastScannedAt?: string;
+}
+
 export interface Store {
   id: string;
   name: string;
@@ -44,6 +72,7 @@ export interface InventoryItem {
   portionLabel: string;
   packDescription: string;
   proteinPerPortion: number;
+  nutrition?: NutritionFacts;
   defaultStoreId: string;
   storePurchaseCounts: Record<string, number>;
   avgDaysPerFullPack: number;
@@ -86,7 +115,7 @@ export interface RecipeIngredient {
   itemId?: string;
   name: string;
   alias?: string;
-  portionsNeeded: number;
+  portionsNeeded: number; // per 1 person serving
 }
 
 export interface MealRecipe {
@@ -99,7 +128,10 @@ export interface MealRecipe {
   effort: EffortLevel;
   tools: CookingTool[];
   proteinGrams: number;
+  sugarGrams: number;
+  fiberGrams: number;
   calories: number;
+  micronutrients: string[]; // e.g., ['Iron', 'Vitamin C', 'Omega-3']
   nutritionHighlight: string;
   ingredients: RecipeIngredient[];
   quickSteps: string[];
@@ -112,15 +144,36 @@ export interface PlannedMeal {
   dayLabel: string;
   slot: 'lunch' | 'dinner';
   recipeId: string;
+  servings: number; // 1 = solo, 2 = together, 3+ = guests
   cooked: boolean;
   source: 'library' | 'ai_suggested';
   reasonNote: string;
 }
 
+export interface ReceiptParsedItem {
+  id: string;
+  rawReceiptText: string;
+  matchedItemId?: string;
+  name: string;
+  alias: string;
+  portionsToAdd: number;
+  portionLabel: string;
+  packDescription: string;
+  zone: StorageZone;
+  category: FoodCategory;
+  price?: number;
+  included: boolean;
+  confidence: 'high' | 'medium' | 'new';
+}
+
 export interface HouseholdSettings {
   language: UILanguage;
+  uiMode: UIMode;
+  eatingMode: EatingMode;
+  guestCount: number;
   shoppingDay: number; // 0 = Sun, 6 = Sat
   dailyProteinTarget: number;
+  dailySugarLimit: number;
   householdSize: number;
   activeUser: 'Ali' | 'Partner';
   defaultTools: CookingTool[];
