@@ -268,6 +268,69 @@ Current Kitchen Inventory: ${JSON.stringify(stockedInventory)}`,
       });
     }
 
+    if (action === 'parse_voice_food') {
+      const { audioBase64, audioMimeType, transcript, languageHint, existingItems, cuisines } = body;
+      const system = `You are a bilingual English & Persian (Farsi) kitchen assistant for a meal & inventory tracking app.
+The user will describe a food/meal by voice (audio or text) in English, Farsi, or mixed Pinglish/Farsi+English.
+Your job:
+1. Accurately transcribe what they said (preserve natural phrasing) and extract the dish details (clean English name + natural Persian alias, cuisine, mealType, prepMinutes, cooking tools, brief quickSteps).
+2. Extract EVERY ingredient and its per-1-person serving amount (portionsNeeded & portionLabel). If the user gave a total recipe for 2+ people, normalize portionsNeeded to 1 serving where obvious, or preserve the spoken amount cleanly.
+3. Match each ingredient to an existing item in existingItems whenever it refers to the same ingredient (match across English & Persian — e.g. "سینه مرغ" matches "Chicken Breast", "شیر" matches "2% Milk", "سبزی" matches "Fresh Persian Herbs"). When matched, set "matchedItemId" to that exact item's id and align portionsNeeded with its portionLabel when reasonable.
+4. For any ingredient NOT in existingItems, omit "matchedItemId" and provide clean English "name", Persian "alias", "category", "zone", "trackingMode", and "packDescription" so the user can confirm creating it in their kitchen.
+
+Return strictly valid JSON with this exact shape:
+{
+  "transcript": "verbatim or clean transcript of what the user said",
+  "name": "Clean English dish name",
+  "alias": "Natural Persian dish name (e.g. قورمه‌سبزی)",
+  "cuisine": "One of the known cuisines or a new short cuisine name",
+  "mealType": "breakfast" | "lunch" | "dinner" | "snack",
+  "prepMinutes": 25,
+  "tools": ["air_fryer" | "oven" | "pan" | "grill" | "instant_pot" | "slow_cooker" | "blender" | "no_cook"],
+  "quickSteps": ["Short step 1", "Short step 2"],
+  "ingredients": [
+    {
+      "spokenText": "original spoken ingredient phrase",
+      "matchedItemId": "exact_id_from_existingItems_or_null",
+      "name": "Clean English ingredient name",
+      "alias": "Natural Persian alias",
+      "portionsNeeded": 1,
+      "portionLabel": "e.g. 180g serving, 1 cup, 2 eggs, 1 tbsp",
+      "category": "protein" | "dairy" | "produce" | "beverages" | "grains" | "condiments" | "spices" | "pantry_staple" | "snacks" | "prepared",
+      "zone": "fridge" | "freezer" | "pantry",
+      "trackingMode": "portioned" | "continuous",
+      "packDescription": "e.g. 1 kg bag, 4L jug, 1 jar"
+    }
+  ]
+}`;
+
+      const parts: unknown[] = [
+        {
+          text: `Language hint: ${languageHint || 'auto (English or Farsi)'}.
+Known cuisines: ${JSON.stringify(cuisines || ['Persian', 'Western', 'Fusion', 'Mediterranean'])}.
+Existing kitchen items (match matchedItemId whenever possible): ${JSON.stringify(
+            (existingItems || []).slice(0, 120)
+          )}.
+${transcript ? `Spoken/typed text: "${transcript}"` : 'Listen to the attached audio and extract the food and all ingredients:'}`,
+        },
+      ];
+
+      if (audioBase64) {
+        parts.push({
+          inlineData: {
+            mimeType: audioMimeType || 'audio/webm',
+            data: audioBase64,
+          },
+        });
+      }
+
+      const result = await callGemini(geminiKey, parts, system);
+
+      return new Response(JSON.stringify(result), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
     return new Response(JSON.stringify({ error: `Unknown action: ${action}` }), {
       status: 400,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
