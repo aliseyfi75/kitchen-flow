@@ -186,7 +186,7 @@ export interface HouseholdSettings {
   dailyProteinTarget: number;
   dailySugarLimit: number;
   householdSize: number;
-  activeUser: 'Ali' | 'Partner';
+  activeUser: 'Ali' | 'Keemia';
   defaultTools: CookingTool[];
   householdName: string;
 }

@@ -233,7 +233,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               Active User (Demo Switcher)
             </label>
             <div className="grid grid-cols-2 gap-1.5">
-              {(['Ali', 'Partner'] as const).map((user) => (
+              {(['Ali', 'Keemia'] as const).map((user) => (
                 <button
                   key={user}
                   type="button"

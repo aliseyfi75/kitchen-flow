@@ -3,7 +3,7 @@ import { Lock, ShieldCheck, Sparkles, X } from 'lucide-react';
 
 interface LoginGateModalProps {
   onClose: () => void;
-  onSelectDemoUser: (user: 'Ali' | 'Partner') => void;
+  onSelectDemoUser: (user: 'Ali' | 'Keemia') => void;
 }
 
 export const LoginGateModal: React.FC<LoginGateModalProps> = ({
@@ -69,12 +69,12 @@ export const LoginGateModal: React.FC<LoginGateModalProps> = ({
               <button
                 type="button"
                 onClick={() => {
-                  onSelectDemoUser('Partner');
+                  onSelectDemoUser('Keemia');
                   onClose();
                 }}
                 className="rounded-xl bg-stone-900 hover:bg-stone-800 text-white py-2.5 px-3 text-xs font-bold shadow-xs transition"
               >
-                Enter as Partner (Demo)
+                Enter as Keemia (Demo)
               </button>
             </div>
           </div>

@@ -551,7 +551,7 @@ export function createSeedState(): KitchenState {
         type: 'use_portion',
         deltaPortions: -2,
         timestamp: daysAgo(1),
-        actor: 'Partner',
+        actor: 'Keemia',
       },
       {
         id: 'ev-3',
@@ -766,7 +766,7 @@ export function createSeedState(): KitchenState {
       householdSize: 2,
       activeUser: 'Ali',
       defaultTools: ['air_fryer', 'oven', 'pan'],
-      householdName: 'Ali & Partner Kitchen',
+      householdName: 'Ali & Keemia Kitchen',
     },
   };
 }
