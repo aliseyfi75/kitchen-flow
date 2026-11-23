@@ -22,6 +22,8 @@ import {
 import { CATEGORY_META, ZONE_META } from '../i18n/translations';
 import { simulateNutritionLabelScan } from '../utils/scannerSimulation';
 import { lookupBarcodeFromOpenFoodFacts, SAMPLE_BARCODES } from '../utils/barcodeLookup';
+import { isSupabaseConfigured } from '../services/supabaseClient';
+import { scanNutritionLabelWithGemini } from '../services/geminiEdge';
 
 interface ItemModalProps {
   item: InventoryItem | null;
@@ -228,17 +230,36 @@ export const ItemModal: React.FC<ItemModalProps> = ({
     }
   };
 
-  const handleLabelPhoto = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleLabelPhoto = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     setLabelPreviewUrl(URL.createObjectURL(file));
     setIsScanningLabel(true);
     setScanSuccessMsg(null);
+    setBarcodeError(null);
+
+    if (isSupabaseConfigured) {
+      try {
+        const scanned = await scanNutritionLabelWithGemini(file, name || alias || 'food item');
+        applyScannedNutrition(scanned);
+        setScanSuccessMsg(
+          'Nutrition Facts extracted live via Gemini Vision! Review any field below and tap Save.'
+        );
+        setIsScanningLabel(false);
+        return;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Edge function unavailable';
+        setBarcodeError(
+          `Live Gemini label scan unavailable (${msg}). Loaded sample values so you can edit manually.`
+        );
+      }
+    }
+
     window.setTimeout(() => {
       applyScannedNutrition(simulateNutritionLabelScan(name || alias || 'packaged item'));
       setScanSuccessMsg('Nutrition Facts table extracted! Review any field below and tap Save.');
       setIsScanningLabel(false);
-    }, 550);
+    }, 500);
   };
 
   const handleDemoLabelScan = () => {

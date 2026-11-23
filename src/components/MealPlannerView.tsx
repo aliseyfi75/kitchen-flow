@@ -40,6 +40,8 @@ import {
   generateSmartWeeklyPlan,
   scoreRecipeAgainstInventory,
 } from '../utils/mealEngine';
+import { isSupabaseConfigured } from '../services/supabaseClient';
+import { generateMealsWithGemini } from '../services/geminiEdge';
 
 interface MealPlannerViewProps {
   items: InventoryItem[];
@@ -57,7 +59,10 @@ interface MealPlannerViewProps {
   onUpdateMealServings: (plannedMealId: string, servings: number) => void;
   onMarkMealCooked: (plannedMealId: string, deductInventory: boolean) => void;
   onCookRecipeDirect: (recipeId: string, servings: number) => void;
-  onAddRecipe: (recipe: Omit<MealRecipe, 'id'>, newInventoryItems?: InventoryItem[]) => void;
+  onAddRecipe: (
+    recipe: Omit<MealRecipe, 'id'> & { id?: string },
+    newInventoryItems?: InventoryItem[]
+  ) => void;
   onAddCuisine: (cuisine: string) => void;
   onToggleFavorite: (recipeId: string) => void;
   onAddMissingToShopping: (entry: Omit<ShoppingItem, 'id' | 'addedAt' | 'checked'>) => void;
@@ -118,6 +123,8 @@ export const MealPlannerView: React.FC<MealPlannerViewProps> = ({
   const [ingredientPrefs, setIngredientPrefs] = useState<Record<string, 'must' | 'exclude'>>({});
   const [expandedRecipeId, setExpandedRecipeId] = useState<string | null>(null);
   const [showAiPayload, setShowAiPayload] = useState(false);
+  const [isCallingGemini, setIsCallingGemini] = useState(false);
+  const [geminiNotice, setGeminiNotice] = useState<string | null>(null);
 
   // Food Library controls (search, filter by Ready-to-Cook, per-card serving selector)
   const [librarySearch, setLibrarySearch] = useState('');
@@ -256,8 +263,75 @@ export const MealPlannerView: React.FC<MealPlannerViewProps> = ({
   };
 
   const handleGeneratePlan = () => {
+    setGeminiNotice(null);
     const generated = generateSmartWeeklyPlan(recipes, items, request, 2);
     onSetWeeklyPlan(generated);
+  };
+
+  const handleGenerateWithGemini = async () => {
+    if (!isSupabaseConfigured) {
+      setGeminiNotice(
+        'Connect Supabase + deploy the gemini-assistant Edge Function (see supabase/SETUP.md) to generate fresh AI meals with your private Gemini key. Using your local smart planner for now!'
+      );
+      handleGeneratePlan();
+      return;
+    }
+
+    setIsCallingGemini(true);
+    setGeminiNotice(null);
+    try {
+      const aiRecipes = await generateMealsWithGemini(items, request);
+      if (aiRecipes.length === 0) {
+        setGeminiNotice('Gemini returned no recipes — falling back to your household library.');
+        handleGeneratePlan();
+        return;
+      }
+
+      const dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+      const createdIds: { id: string; recipe: Omit<MealRecipe, 'id'> & { reasonNote?: string } }[] = [];
+      for (const r of aiRecipes) {
+        const id = `rec-ai-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+        onAddRecipe({ ...r, id }, []);
+        createdIds.push({ id, recipe: r });
+      }
+
+      // Immediately schedule newly returned AI meals (or combine with existing library)
+      const latestRecipes: MealRecipe[] = [
+        ...createdIds.map(({ id, recipe }) => ({ ...recipe, id })),
+        ...recipes,
+      ];
+      if (request.days === 0 && createdIds[0]) {
+        onSetWeeklyPlan([
+          {
+            id: `plan-ai-single-${Date.now()}`,
+            dayIndex: 0,
+            dayLabel: 'Next Meal (Gemini AI)',
+            slot: 'dinner',
+            recipeId: latestRecipes[0].id,
+            servings: 2,
+            cooked: false,
+            source: 'ai_suggested',
+            reasonNote: createdIds[0].recipe.reasonNote || 'Suggested live by Gemini AI',
+          },
+        ]);
+      } else {
+        const generated = generateSmartWeeklyPlan(latestRecipes, items, request, 2);
+        onSetWeeklyPlan(
+          generated.map((m, idx) => ({
+            ...m,
+            dayLabel: dayNames[m.dayIndex % 7],
+            source: idx < createdIds.length ? 'ai_suggested' : m.source,
+          }))
+        );
+      }
+      setGeminiNotice(`Generated ${aiRecipes.length} fresh meal idea(s) live via Gemini AI!`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Gemini Edge Function error';
+      setGeminiNotice(`Live Gemini AI unavailable (${msg}). Built plan from your library instead.`);
+      handleGeneratePlan();
+    } finally {
+      setIsCallingGemini(false);
+    }
   };
 
   const groupedDays = useMemo(() => {
@@ -594,15 +668,32 @@ export const MealPlannerView: React.FC<MealPlannerViewProps> = ({
             </span>
           )}
 
-          <button
-            type="button"
-            onClick={handleGeneratePlan}
-            className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-teal-700 to-indigo-700 hover:from-teal-800 hover:to-indigo-800 text-white px-5 py-2.5 text-sm font-bold shadow-sm transition"
-          >
-            <Sparkles className="w-4 h-4" />
-            {days === 0 ? 'Suggest 1 Meal Now' : t(lang, 'generatePlan')}
-          </button>
+          <div className="flex items-center flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={handleGeneratePlan}
+              className="inline-flex items-center gap-2 rounded-xl bg-teal-700 hover:bg-teal-800 text-white px-4 py-2.5 text-xs sm:text-sm font-bold shadow-xs transition"
+            >
+              <ChefHat className="w-4 h-4" />
+              {days === 0 ? 'Suggest 1 Meal Now' : t(lang, 'generatePlan')}
+            </button>
+            <button
+              type="button"
+              disabled={isCallingGemini}
+              onClick={handleGenerateWithGemini}
+              className="inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-indigo-700 to-violet-700 hover:from-indigo-800 hover:to-violet-800 disabled:opacity-50 text-white px-4 py-2.5 text-xs sm:text-sm font-bold shadow-xs transition"
+            >
+              <Sparkles className={`w-4 h-4 ${isCallingGemini ? 'animate-spin' : ''}`} />
+              {isCallingGemini ? 'Asking Gemini...' : 'Ask Gemini AI'}
+            </button>
+          </div>
         </div>
+
+        {geminiNotice && (
+          <div className="rounded-xl bg-indigo-50 border border-indigo-200 px-3.5 py-2.5 text-xs text-indigo-900">
+            {geminiNotice}
+          </div>
+        )}
 
         {isDetailed && showAiPayload && (
           <div className="rounded-2xl bg-stone-950 text-teal-200 p-4 text-[11px] font-mono overflow-x-auto max-h-64">

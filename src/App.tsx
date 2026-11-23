@@ -1,13 +1,18 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   ChefHat,
+  Cloud,
+  CloudOff,
   Layers,
+  Loader2,
   Lock,
+  LogOut,
   Refrigerator,
   Settings,
   ShoppingCart,
   Sparkles,
 } from 'lucide-react';
+import { useSupabaseAuth } from './hooks/useSupabaseAuth';
 import { useKitchenStore } from './hooks/useKitchenStore';
 import { t } from './i18n/translations';
 import { KitchenView } from './components/KitchenView';
@@ -15,13 +20,26 @@ import { ShoppingView } from './components/ShoppingView';
 import { MealPlannerView } from './components/MealPlannerView';
 import { SettingsView } from './components/SettingsView';
 import { LoginGateModal } from './components/LoginGateModal';
+import { AuthGate } from './components/AuthGate';
 import { ReceiptScanModal } from './components/ReceiptScanModal';
 
 type TabId = 'kitchen' | 'shopping' | 'meals' | 'settings';
 
 export function App() {
-  const store = useKitchenStore();
-  const { state, toast } = store;
+  const auth = useSupabaseAuth();
+
+  const cloudContext = useMemo(() => {
+    if (auth.mode === 'cloud' && auth.member) {
+      return {
+        householdId: auth.member.householdId,
+        displayName: auth.member.displayName,
+      };
+    }
+    return null;
+  }, [auth.mode, auth.member]);
+
+  const store = useKitchenStore(cloudContext);
+  const { state, toast, syncStatus } = store;
   const lang = 'en' as const;
   const uiMode = state.settings.uiMode;
 
@@ -33,6 +51,21 @@ export function App() {
     document.documentElement.dir = 'ltr';
     document.documentElement.lang = 'en';
   }, []);
+
+  // When Supabase is configured, strictly gate the entire app behind 2-user private login!
+  if (auth.mode === 'cloud' && (auth.loading || !auth.session || !auth.member)) {
+    return (
+      <AuthGate
+        loading={auth.loading}
+        membershipError={auth.membershipError}
+        signedInEmail={auth.session?.user?.email}
+        onSignIn={auth.signIn}
+        onSignOut={auth.signOut}
+      />
+    );
+  }
+
+  const activeDisplayName = auth.member?.displayName || state.settings.activeUser;
 
   const essentialShoppingCount = state.shoppingList.filter(
     (s) => s.priority === 'essential' && !s.checked
@@ -59,10 +92,35 @@ export function App() {
             <div className="w-9 h-9 rounded-xl bg-teal-700 text-white flex items-center justify-center shadow-xs font-bold shrink-0">
               KF
             </div>
-            <div className="min-w-0">
+            <div className="min-w-0 flex items-center gap-2">
               <h1 className="font-bold text-base sm:text-lg tracking-tight text-stone-900 whitespace-nowrap">
                 {t(lang, 'appName')}
               </h1>
+              {auth.mode === 'cloud' && (
+                <span
+                  className={`hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                    syncStatus === 'synced'
+                      ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                      : syncStatus === 'saving' || syncStatus === 'loading'
+                      ? 'bg-amber-50 text-amber-800 border border-amber-200'
+                      : 'bg-rose-50 text-rose-700 border border-rose-200'
+                  }`}
+                  title="Real-time household cloud sync status"
+                >
+                  {syncStatus === 'synced' ? (
+                    <Cloud className="w-3 h-3" />
+                  ) : syncStatus === 'offline' ? (
+                    <CloudOff className="w-3 h-3" />
+                  ) : (
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                  )}
+                  {syncStatus === 'synced'
+                    ? 'Synced'
+                    : syncStatus === 'offline'
+                    ? 'Offline'
+                    : 'Syncing'}
+                </span>
+              )}
             </div>
           </div>
 
@@ -97,9 +155,8 @@ export function App() {
             })}
           </nav>
 
-          {/* Header Controls: Simple / Detailed Toggle + Login Gate */}
+          {/* Header Controls: Simple / Detailed Toggle + Account */}
           <div className="flex items-center gap-1.5 shrink-0">
-            {/* Simple / Detailed Mode Switch */}
             <div
               className="inline-flex items-center rounded-xl border border-stone-200 bg-white p-0.5 shadow-2xs"
               role="group"
@@ -133,15 +190,27 @@ export function App() {
               </button>
             </div>
 
-            <button
-              type="button"
-              onClick={() => setShowLoginPreview(true)}
-              className="inline-flex items-center gap-1.5 rounded-xl border border-stone-200 bg-white hover:bg-stone-50 px-2.5 py-1.5 text-xs font-semibold text-stone-700"
-              title="Preview 2-user private login gate"
-            >
-              <Lock className="w-3.5 h-3.5 text-teal-700" />
-              <span className="hidden sm:inline">{state.settings.activeUser}</span>
-            </button>
+            {auth.mode === 'cloud' ? (
+              <button
+                type="button"
+                onClick={() => auth.signOut()}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-stone-200 bg-white hover:bg-rose-50 hover:text-rose-700 hover:border-rose-200 px-2.5 py-1.5 text-xs font-semibold text-stone-700 transition"
+                title={`Signed in as ${activeDisplayName} — Click to sign out`}
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">{activeDisplayName}</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setShowLoginPreview(true)}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-stone-200 bg-white hover:bg-stone-50 px-2.5 py-1.5 text-xs font-semibold text-stone-700"
+                title="Preview 2-user private login gate"
+              >
+                <Lock className="w-3.5 h-3.5 text-teal-700" />
+                <span className="hidden sm:inline">{activeDisplayName}</span>
+              </button>
+            )}
           </div>
         </div>
       </header>

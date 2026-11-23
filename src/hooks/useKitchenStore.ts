@@ -12,6 +12,8 @@ import {
   Store,
 } from '../types/kitchen';
 import { kitchenRepo } from '../services/storage';
+import { supabase } from '../services/supabaseClient';
+import { createSeedState } from '../data/seedData';
 import { computeItemForecast, getLearnedStoreId, updateEmaCycleDays } from '../utils/forecasting';
 
 export interface ToastMessage {
@@ -20,15 +22,141 @@ export interface ToastMessage {
   tone?: 'teal' | 'amber' | 'rose';
 }
 
-export function useKitchenStore() {
+export type SyncStatus = 'local_demo' | 'loading' | 'synced' | 'saving' | 'offline';
+
+export interface CloudSyncContext {
+  householdId: string;
+  displayName: string;
+}
+
+const CLIENT_INSTANCE_ID = Math.random().toString(36).slice(2, 10);
+
+function mergeRemoteState(remote: Partial<KitchenState>): KitchenState {
+  const defaults = createSeedState();
+  return {
+    ...defaults,
+    ...remote,
+    settings: {
+      ...defaults.settings,
+      ...(remote.settings || {}),
+      language: 'en',
+    },
+  };
+}
+
+export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
   const [state, setState] = useState<KitchenState>(() => kitchenRepo.load());
   const stateRef = useRef(state);
   stateRef.current = state;
   const [toast, setToast] = useState<ToastMessage | null>(null);
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>(
+    cloudContext ? 'loading' : 'local_demo'
+  );
 
+  // Track whether the latest state change came from remote Realtime sync so we don't write it back
+  const skipNextCloudSaveRef = useRef(false);
+  const cloudReadyRef = useRef(false);
+
+  // Always cache locally for instant startup & offline resilience
   useEffect(() => {
     kitchenRepo.save(state);
   }, [state]);
+
+  // Initial load + Supabase Realtime subscription when signed into cloud household
+  useEffect(() => {
+    if (!cloudContext || !supabase) {
+      cloudReadyRef.current = false;
+      setSyncStatus('local_demo');
+      return;
+    }
+
+    let active = true;
+    const { householdId, displayName } = cloudContext;
+    const actorTag = `${displayName}:${CLIENT_INSTANCE_ID}`;
+
+    const initCloud = async () => {
+      setSyncStatus('loading');
+      const { data, error } = await supabase!
+        .from('household_state')
+        .select('state, updated_by')
+        .eq('household_id', householdId)
+        .maybeSingle();
+
+      if (!active) return;
+
+      if (error) {
+        setSyncStatus('offline');
+        return;
+      }
+
+      if (data?.state) {
+        skipNextCloudSaveRef.current = true;
+        setState(mergeRemoteState(data.state as Partial<KitchenState>));
+      } else {
+        // First time ever for this household: seed initial state to cloud
+        await supabase!.from('household_state').upsert({
+          household_id: householdId,
+          state: stateRef.current,
+          updated_at: new Date().toISOString(),
+          updated_by: actorTag,
+        });
+      }
+
+      cloudReadyRef.current = true;
+      setSyncStatus('synced');
+    };
+
+    initCloud();
+
+    const channel = supabase
+      .channel(`household-${householdId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'household_state',
+          filter: `household_id=eq.${householdId}`,
+        },
+        (payload) => {
+          const row = payload.new as { state?: Partial<KitchenState>; updated_by?: string } | null;
+          if (!row?.state || row.updated_by === actorTag) return;
+          skipNextCloudSaveRef.current = true;
+          setState(mergeRemoteState(row.state));
+          setSyncStatus('synced');
+        }
+      )
+      .subscribe();
+
+    return () => {
+      active = false;
+      cloudReadyRef.current = false;
+      supabase!.removeChannel(channel);
+    };
+  }, [cloudContext?.householdId, cloudContext?.displayName]);
+
+  // Debounced cloud push on local edits
+  useEffect(() => {
+    if (!cloudContext || !supabase || !cloudReadyRef.current) return;
+    if (skipNextCloudSaveRef.current) {
+      skipNextCloudSaveRef.current = false;
+      return;
+    }
+
+    setSyncStatus('saving');
+    const actorTag = `${cloudContext.displayName}:${CLIENT_INSTANCE_ID}`;
+    const timer = window.setTimeout(async () => {
+      const { error } = await supabase!.from('household_state').upsert({
+        household_id: cloudContext.householdId,
+        state: stateRef.current,
+        updated_at: new Date().toISOString(),
+        updated_by: actorTag,
+      });
+      setSyncStatus(error ? 'offline' : 'synced');
+    }, 350);
+
+    return () => window.clearTimeout(timer);
+  }, [state, cloudContext?.householdId, cloudContext?.displayName]);
 
   const notify = useCallback((text: string, tone: ToastMessage['tone'] = 'teal') => {
     const id = String(Date.now());
@@ -647,7 +775,11 @@ export function useKitchenStore() {
   );
 
   const addRecipeWithNewIngredients = useCallback(
-    (recipe: Omit<MealRecipe, 'id'>, newInventoryItems: InventoryItem[] = []) => {
+    (
+      recipe: Omit<MealRecipe, 'id'> & { id?: string },
+      newInventoryItems: InventoryItem[] = []
+    ) => {
+      const assignedId = recipe.id || `rec-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`;
       setState((prev) => {
         const existingCuisines = prev.settings.cuisines || [];
         const hasCuisine = existingCuisines.some(
@@ -656,7 +788,7 @@ export function useKitchenStore() {
         return {
           ...prev,
           items: newInventoryItems.length > 0 ? [...newInventoryItems, ...prev.items] : prev.items,
-          recipes: [{ ...recipe, id: `rec-${Date.now()}` }, ...prev.recipes],
+          recipes: [{ ...recipe, id: assignedId }, ...prev.recipes],
           settings: hasCuisine
             ? prev.settings
             : { ...prev.settings, cuisines: [...existingCuisines, recipe.cuisine] },
@@ -668,6 +800,7 @@ export function useKitchenStore() {
           : `Saved "${recipe.name}" to your food library`,
         'teal'
       );
+      return assignedId;
     },
     [notify]
   );
@@ -923,6 +1056,7 @@ export function useKitchenStore() {
   return {
     state,
     toast,
+    syncStatus,
     usePortion,
     setContinuousLevel,
     markFinished,

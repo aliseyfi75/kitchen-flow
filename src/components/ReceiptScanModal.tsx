@@ -23,6 +23,8 @@ import {
   SAMPLE_RECEIPTS,
   SampleReceipt,
 } from '../utils/scannerSimulation';
+import { isSupabaseConfigured } from '../services/supabaseClient';
+import { scanReceiptWithGemini } from '../services/geminiEdge';
 import { ZONE_META } from '../i18n/translations';
 
 interface ReceiptScanModalProps {
@@ -46,9 +48,11 @@ export const ReceiptScanModal: React.FC<ReceiptScanModalProps> = ({
   const [detectedStoreId, setDetectedStoreId] = useState<string>(stores[0]?.id ?? 'store-costco');
   const [parsedLines, setParsedLines] = useState<ReceiptParsedItem[]>([]);
   const [activeReceiptTitle, setActiveReceiptTitle] = useState<string>('');
+  const [scanNotice, setScanNotice] = useState<string | null>(null);
 
   const runSampleReceipt = (sample: SampleReceipt) => {
     setIsScanning(true);
+    setScanNotice(null);
     setActiveReceiptTitle(`${sample.label} (${sample.totalLabel})`);
     setDetectedStoreId(sample.storeId);
     window.setTimeout(() => {
@@ -57,22 +61,41 @@ export const ReceiptScanModal: React.FC<ReceiptScanModalProps> = ({
     }, 450);
   };
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     const url = URL.createObjectURL(file);
     setImagePreviewUrl(url);
     setIsScanning(true);
+    setScanNotice(null);
     setActiveReceiptTitle(`Uploaded photo: ${file.name}`);
 
-    // Phase 1 demo: show uploaded receipt photo + realistic editable parse preview
-    // Phase 2 will POST the image to Supabase Edge Function -> Gemini Vision
+    if (isSupabaseConfigured) {
+      try {
+        const result = await scanReceiptWithGemini(file, stores, items);
+        setDetectedStoreId(result.detectedStoreId);
+        setParsedLines(result.items);
+        setScanNotice(
+          result.items.length > 0
+            ? `Parsed ${result.items.length} item(s) live via Gemini Vision!`
+            : 'No grocery lines detected — you can add lines manually below.'
+        );
+        setIsScanning(false);
+        return;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Gemini Vision unavailable';
+        setScanNotice(
+          `Live AI scan unavailable (${msg}). Showing editable sample lines — deploy the gemini-assistant Edge Function (see supabase/SETUP.md) for live receipt OCR.`
+        );
+      }
+    }
+
     window.setTimeout(() => {
       const sample = SAMPLE_RECEIPTS[0];
       setDetectedStoreId(sample.storeId);
       setParsedLines(buildParsedReceiptItems(sample, items));
       setIsScanning(false);
-    }, 650);
+    }, 550);
   };
 
   const updateLine = (id: string, patch: Partial<ReceiptParsedItem>) => {
@@ -189,9 +212,17 @@ export const ReceiptScanModal: React.FC<ReceiptScanModalProps> = ({
                   {activeReceiptTitle}
                 </div>
                 <p>
-                  <strong>Demo Mode:</strong> Showing sample extracted lines below so you can test the
-                  review & restock flow. In Phase 2, Gemini Vision (via Supabase Edge Function) reads
-                  your actual photo automatically.
+                  {scanNotice ? (
+                    scanNotice
+                  ) : isSupabaseConfigured ? (
+                    'Receipt photo analyzed via your private Supabase Gemini Edge Function.'
+                  ) : (
+                    <>
+                      <strong>Local Demo Mode:</strong> Showing sample extracted lines so you can test the
+                      review &amp; restock flow. Once Supabase + Gemini Edge Function are connected, your
+                      actual receipt photo is parsed automatically.
+                    </>
+                  )}
                 </p>
               </div>
             </div>
