@@ -20,6 +20,11 @@ import {
 } from '../types/kitchen';
 import { computeItemForecast, formatShoppingDayName } from '../utils/forecasting';
 import { t, ZONE_META } from '../i18n/translations';
+import {
+  formatItemStockSummary,
+  formatRestockLabel,
+  formatShoppingQuantityLabel,
+} from '../utils/inventoryDisplay';
 
 interface ShoppingViewProps {
   items: InventoryItem[];
@@ -205,7 +210,7 @@ export const ShoppingView: React.FC<ShoppingViewProps> = ({
                     name: item.name,
                     alias: item.alias,
                     storeId: forecast.learnedStoreId,
-                    quantityLabel: `${item.packDescription} (${item.totalPortions} portions)`,
+                    quantityLabel: formatShoppingQuantityLabel(item),
                     targetPortions: item.totalPortions,
                     targetZone: item.zone,
                     priority: 'essential',
@@ -314,7 +319,7 @@ export const ShoppingView: React.FC<ShoppingViewProps> = ({
                   if (s.reason === 'manual_from_kitchen' && linkedInv) {
                     helperNote =
                       linkedInv.remainingPortions > 0
-                        ? `Manually added — you still have ${linkedInv.remainingPortions}/${linkedInv.totalPortions} (${linkedInv.portionLabel}) at home (~${liveForecast?.estimatedDaysLeft}d left)`
+                        ? `Manually added — you still have ${formatItemStockSummary(linkedInv)} at home (~${liveForecast?.estimatedDaysLeft}d left)`
                         : 'Manually added — currently out of stock';
                   } else if (
                     (s.reason === 'forecast_midweek' || s.reason === 'forecast_weekend') &&
@@ -454,21 +459,35 @@ export const ShoppingView: React.FC<ShoppingViewProps> = ({
 
             <div className="p-5 space-y-3">
               {checkedItems.map((s) => {
+                const linkedInv = s.inventoryItemId ? itemMap.get(s.inventoryItemId) : undefined;
+                const isContinuous = linkedInv?.trackingMode === 'continuous';
                 const ov = restockOverrides[s.id] || {
                   targetPortions: s.targetPortions,
                   targetZone: s.targetZone,
                   storeId: s.storeId,
                 };
+                const containerCount =
+                  isContinuous && linkedInv && linkedInv.totalPortions > 0
+                    ? Math.max(1, Math.round(ov.targetPortions / linkedInv.totalPortions))
+                    : 1;
+
                 return (
                   <div
                     key={s.id}
                     className="rounded-xl border border-stone-200 p-3.5 space-y-2.5 bg-stone-50/50"
                   >
-                    <div className="font-semibold text-sm text-stone-900">
-                      <span dir="auto">{s.name}</span>{' '}
-                      {s.alias && (
-                        <span dir="auto" className="text-xs text-teal-700 font-normal">
-                          ({s.alias})
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="font-semibold text-sm text-stone-900">
+                        <span dir="auto">{s.name}</span>{' '}
+                        {s.alias && (
+                          <span dir="auto" className="text-xs text-teal-700 font-normal">
+                            ({s.alias})
+                          </span>
+                        )}
+                      </div>
+                      {isContinuous && linkedInv && (
+                        <span className="text-[11px] font-medium text-teal-800 bg-teal-50 border border-teal-100 px-2 py-0.5 rounded-md">
+                          {formatRestockLabel(linkedInv)}
                         </span>
                       )}
                     </div>
@@ -476,23 +495,43 @@ export const ShoppingView: React.FC<ShoppingViewProps> = ({
                     <div className="grid grid-cols-3 gap-2">
                       <div>
                         <label className="block text-[10px] font-semibold uppercase text-stone-500 mb-1">
-                          Portions Packed
+                          {isContinuous ? 'Containers' : 'Portions Packed'}
                         </label>
-                        <input
-                          type="number"
-                          min="1"
-                          value={ov.targetPortions}
-                          onChange={(e) =>
-                            setRestockOverrides((prev) => ({
-                              ...prev,
-                              [s.id]: {
-                                ...ov,
-                                targetPortions: Math.max(1, Number(e.target.value) || 1),
-                              },
-                            }))
-                          }
-                          className="w-full rounded-lg border border-stone-200 bg-white px-2.5 py-1.5 text-xs font-semibold"
-                        />
+                        {isContinuous && linkedInv ? (
+                          <input
+                            type="number"
+                            min="1"
+                            max="20"
+                            value={containerCount}
+                            onChange={(e) => {
+                              const count = Math.max(1, Number(e.target.value) || 1);
+                              setRestockOverrides((prev) => ({
+                                ...prev,
+                                [s.id]: {
+                                  ...ov,
+                                  targetPortions: count * linkedInv.totalPortions,
+                                },
+                              }));
+                            }}
+                            className="w-full rounded-lg border border-stone-200 bg-white px-2.5 py-1.5 text-xs font-semibold"
+                          />
+                        ) : (
+                          <input
+                            type="number"
+                            min="1"
+                            value={ov.targetPortions}
+                            onChange={(e) =>
+                              setRestockOverrides((prev) => ({
+                                ...prev,
+                                [s.id]: {
+                                  ...ov,
+                                  targetPortions: Math.max(1, Number(e.target.value) || 1),
+                                },
+                              }))
+                            }
+                            className="w-full rounded-lg border border-stone-200 bg-white px-2.5 py-1.5 text-xs font-semibold"
+                          />
+                        )}
                       </div>
                       <div>
                         <label className="block text-[10px] font-semibold uppercase text-stone-500 mb-1">

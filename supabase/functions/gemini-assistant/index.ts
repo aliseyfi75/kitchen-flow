@@ -152,7 +152,8 @@ Return strictly valid JSON with this exact shape:
       "portionLabel": "e.g. 180g serving, 1 cup, 2 eggs",
       "packDescription": "e.g. 2 kg pack",
       "zone": "fridge" | "freezer" | "pantry",
-      "category": "protein" | "dairy" | "produce" | "grains" | "pantry_staple" | "snacks",
+      "category": "protein" | "dairy" | "produce" | "beverages" | "grains" | "condiments" | "spices" | "pantry_staple" | "snacks" | "prepared",
+      "trackingMode": "portioned" | "continuous",
       "price": 12.99
     }
   ]

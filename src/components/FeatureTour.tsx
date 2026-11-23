@@ -37,7 +37,7 @@ export const TOUR_STEPS: TourStepDef[] = [
     subtitle: 'Track Fridge, Freezer, and Pantry staples in English & Persian — in one tap.',
     bullets: [
       'Pick Solo (1×), Together (2×), or Guests at the top so every tap deducts the right servings.',
-      'Use the quick 100%–25% level bar for items like milk & greens, or tap Finished to auto-add to Shopping.',
+      'Use the Full–Low level gauge & slider for continuous items like milk, oil & herbs, or tap Finished to auto-add to Shopping.',
       'Tap + Shop on any item anytime to add it manually while keeping a note of what you still have.',
     ],
     icon: <Refrigerator className="w-4 h-4" />,
@@ -50,7 +50,7 @@ export const TOUR_STEPS: TourStepDef[] = [
     title: 'Add Items & Restock in Seconds',
     subtitle: 'Skip tedious typing when unpacking groceries.',
     bullets: [
-      'Tap + Add Item → opens the Barcode Scanner first (free live Open Food Facts lookup) with a 1-tap Skip option.',
+      'Tap + Add Item → scan a barcode or pick a product category (Dairy, Meat, Produce, Oils, Spices…) for tailored entry fields.',
       'Tap Scan Receipt after a Costco or Superstore run → auto-matches existing items, updates stock & clears Shopping.',
     ],
     icon: <Barcode className="w-4 h-4" />,

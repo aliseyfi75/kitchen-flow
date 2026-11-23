@@ -1,4 +1,12 @@
-import { NutritionFacts } from '../types/kitchen';
+import {
+  ContinuousTrackingStyle,
+  FoodCategory,
+  MeasureUnit,
+  NutritionFacts,
+  StorageZone,
+  TrackingMode,
+} from '../types/kitchen';
+import { inferProductDefaultsFromText, parseMeasuredQuantity } from './productCategories';
 
 export interface BarcodeLookupResult {
   found: boolean;
@@ -6,6 +14,11 @@ export interface BarcodeLookupResult {
   productName?: string;
   brand?: string;
   quantity?: string;
+  measuredQuantity?: { size: number; unit: MeasureUnit };
+  suggestedCategory?: FoodCategory;
+  suggestedZone?: StorageZone;
+  suggestedTrackingMode?: TrackingMode;
+  suggestedContinuousStyle?: ContinuousTrackingStyle;
   nutrition?: NutritionFacts;
   sourceLabel: string;
   error?: string;
@@ -46,7 +59,7 @@ export async function lookupBarcodeFromOpenFoodFacts(
 
   try {
     const res = await fetch(
-      `https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(barcode)}.json?fields=product_name,brands,quantity,serving_size,nutriments`
+      `https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(barcode)}.json?fields=product_name,brands,quantity,serving_size,nutriments,categories_tags`
     );
 
     if (!res.ok) {
@@ -138,12 +151,26 @@ export async function lookupBarcodeFromOpenFoodFacts(
       .join(' ')
       .trim();
 
+    const categoryHintText = [
+      p.product_name || '',
+      ...(Array.isArray(p.categories_tags) ? p.categories_tags : []),
+    ]
+      .join(' ')
+      .replace(/en:|[-_]/g, ' ');
+    const inferred = inferProductDefaultsFromText(categoryHintText);
+    const measuredQuantity = parseMeasuredQuantity(p.quantity) ?? undefined;
+
     return {
       found: true,
       barcode,
       productName: fullName || p.product_name || undefined,
       brand: p.brands,
       quantity: p.quantity,
+      measuredQuantity,
+      suggestedCategory: inferred?.category,
+      suggestedZone: inferred?.zone,
+      suggestedTrackingMode: inferred?.trackingMode,
+      suggestedContinuousStyle: measuredQuantity ? 'measured' : inferred?.continuousStyle,
       nutrition,
       sourceLabel: 'Open Food Facts (Live Web Lookup)',
     };

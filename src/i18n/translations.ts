@@ -18,12 +18,16 @@ export const ZONE_META: Record<StorageZone, { en: string; fa: string }> = {
 };
 
 export const CATEGORY_META: Record<FoodCategory, { en: string; fa: string }> = {
-  protein: { en: 'Protein & Meat', fa: 'پروتئین و گوشت' },
+  protein: { en: 'Meat, Poultry & Fish', fa: 'پروتئین و گوشت' },
   dairy: { en: 'Dairy & Eggs', fa: 'لبنیات و تخم‌مرغ' },
-  produce: { en: 'Produce & Herbs', fa: 'سبزیجات و میوه' },
-  grains: { en: 'Grains & Carbs', fa: 'غلات و برنج' },
-  pantry_staple: { en: 'Pantry Staples', fa: 'اقلام پایه' },
-  snacks: { en: 'Healthy Snacks', fa: 'میان‌وعده سالم' },
+  produce: { en: 'Produce & Fresh Herbs', fa: 'سبزیجات و میوه' },
+  beverages: { en: 'Drinks & Beverages', fa: 'نوشیدنی‌ها' },
+  grains: { en: 'Grains, Rice & Bread', fa: 'غلات، برنج و نان' },
+  condiments: { en: 'Oils, Sauces & Condiments', fa: 'روغن، سس و چاشنی' },
+  spices: { en: 'Spices, Tea & Baking', fa: 'ادویه، چای و پخت' },
+  pantry_staple: { en: 'Canned & Dry Staples', fa: 'کنسرو و اقلام پایه' },
+  snacks: { en: 'Snacks, Nuts & Protein', fa: 'میان‌وعده، آجیل و پروتئین' },
+  prepared: { en: 'Prepared & Leftovers', fa: 'غذای آماده و باقیمانده' },
 };
 
 export const EFFORT_META: Record<EffortLevel, { en: string; fa: string; descEn: string; descFa: string }> = {

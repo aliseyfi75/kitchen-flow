@@ -85,7 +85,13 @@ export function estimateRecipeNutrition(
     } else if (inv) {
       // Fallback when inventory item doesn't have full nutrition facts scanned yet
       protein += inv.proteinPerPortion * qty;
-      calories += (inv.proteinPerPortion * 5 + 60) * qty;
+      if (inv.category === 'spices') {
+        calories += 5 * qty;
+      } else if (inv.category === 'condiments') {
+        calories += 45 * qty;
+      } else {
+        calories += (inv.proteinPerPortion * 5 + 60) * qty;
+      }
       if (inv.category === 'produce') {
         fiber += 2.5 * qty;
         sugar += 2 * qty;
@@ -93,6 +99,8 @@ export function estimateRecipeNutrition(
       } else if (inv.category === 'grains') {
         calories += 140 * qty;
         fiber += 1.5 * qty;
+      } else if (inv.category === 'beverages') {
+        sugar += 4 * qty;
       }
     } else {
       // Newly typed ingredient not yet in inventory — smart keyword heuristics
@@ -184,7 +192,12 @@ export function scoreRecipeAgainstInventory(
     }
 
     const invItem = ing.itemId ? itemMap.get(ing.itemId) : undefined;
-    if (invItem && invItem.remainingPortions >= Math.min(ing.portionsNeeded, 0.5)) {
+    const hasEnough =
+      invItem &&
+      (invItem.trackingMode === 'continuous'
+        ? invItem.remainingPortions > 0
+        : invItem.remainingPortions >= Math.min(ing.portionsNeeded, 0.5));
+    if (invItem && hasEnough) {
       matchedCount += 1;
       const fc = computeItemForecast(invItem, request.shoppingDay);
       if (fc.expiringSoon) {
@@ -198,7 +211,9 @@ export function scoreRecipeAgainstInventory(
       const byName = items.find(
         (it) =>
           it.name.toLowerCase() === ing.name.toLowerCase() &&
-          it.remainingPortions >= Math.min(ing.portionsNeeded, 0.5)
+          (it.trackingMode === 'continuous'
+            ? it.remainingPortions > 0
+            : it.remainingPortions >= Math.min(ing.portionsNeeded, 0.5))
       );
       if (byName) {
         matchedCount += 1;

@@ -11,6 +11,7 @@ import {
 import { HouseholdSettings, InventoryItem, Store, UILanguage } from '../types/kitchen';
 import { computeItemForecast, formatShoppingDayName } from '../utils/forecasting';
 import { t } from '../i18n/translations';
+import { formatItemStockSummary } from '../utils/inventoryDisplay';
 
 interface SettingsViewProps {
   items: InventoryItem[];
@@ -36,6 +37,7 @@ const LearnedRhythmRow: React.FC<{
   const fc = computeItemForecast(item, shoppingDay);
   const [cycleDraft, setCycleDraft] = useState(String(item.avgDaysPerFullPack));
   const [rateDraft, setRateDraft] = useState(String(fc.dailyBurnRate));
+  const isPercentScale = item.trackingMode === 'continuous' && item.totalPortions === 100;
 
   useEffect(() => {
     setCycleDraft(String(item.avgDaysPerFullPack));
@@ -73,9 +75,7 @@ const LearnedRhythmRow: React.FC<{
             ({item.alias})
           </span>
         )}
-        <div className="text-[10px] text-stone-400">
-          {item.remainingPortions}/{item.totalPortions} × {item.portionLabel}
-        </div>
+        <div className="text-[10px] text-stone-400">{formatItemStockSummary(item)}</div>
       </td>
 
       <td className="py-2.5 px-2">
@@ -94,7 +94,9 @@ const LearnedRhythmRow: React.FC<{
             aria-label={`Learned cycle days for ${item.name}`}
             className="w-16 rounded-lg border border-stone-200 bg-white px-2 py-1 text-xs font-semibold text-stone-800 focus:outline-none focus:ring-2 focus:ring-teal-500"
           />
-          <span className="text-[11px] text-stone-500 whitespace-nowrap">d / pack</span>
+          <span className="text-[11px] text-stone-500 whitespace-nowrap">
+            {item.trackingMode === 'continuous' ? 'd / unit' : 'd / pack'}
+          </span>
         </div>
       </td>
 
@@ -104,7 +106,7 @@ const LearnedRhythmRow: React.FC<{
             type="number"
             step="0.1"
             min="0.05"
-            max="50"
+            max={isPercentScale ? 100 : 50}
             value={rateDraft}
             onChange={(e) => setRateDraft(e.target.value)}
             onBlur={commitRate}
@@ -114,7 +116,9 @@ const LearnedRhythmRow: React.FC<{
             aria-label={`Burn rate for ${item.name}`}
             className="w-16 rounded-lg border border-stone-200 bg-white px-2 py-1 text-xs font-semibold text-teal-800 focus:outline-none focus:ring-2 focus:ring-teal-500"
           />
-          <span className="text-[11px] text-stone-500 whitespace-nowrap">/ day</span>
+          <span className="text-[11px] text-stone-500 whitespace-nowrap">
+            {isPercentScale ? '% / day' : '/ day'}
+          </span>
         </div>
       </td>
 

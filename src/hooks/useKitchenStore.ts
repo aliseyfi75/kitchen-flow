@@ -15,6 +15,18 @@ import { kitchenRepo } from '../services/storage';
 import { supabase } from '../services/supabaseClient';
 import { createCleanState, stripLegacyDemoData } from '../data/seedData';
 import { computeItemForecast, getLearnedStoreId, updateEmaCycleDays } from '../utils/forecasting';
+import {
+  formatItemStockSummary,
+  formatMeasuredAmount,
+  formatRestockLabel,
+  formatShoppingQuantityLabel,
+  getLevelWord,
+} from '../utils/inventoryDisplay';
+import {
+  getCategoryProfile,
+  inferProductDefaultsFromText,
+  parseMeasuredQuantity,
+} from '../utils/productCategories';
 
 export interface ToastMessage {
   id: string;
@@ -315,7 +327,7 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
       name: item.name,
       alias: item.alias,
       storeId,
-      quantityLabel: `${item.packDescription} (${item.totalPortions} portions)`,
+      quantityLabel: formatShoppingQuantityLabel(item),
       targetPortions: item.totalPortions,
       targetZone: item.zone,
       priority,
@@ -390,8 +402,14 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
 
       if (nextRemaining === 0 && target.autoAddOnEmpty) {
         notify(`${target.name} finished → auto-added to ${storeName}!`, 'amber');
+      } else if (target.trackingMode === 'continuous') {
+        const updatedPreview = { ...target, remainingPortions: nextRemaining };
+        notify(
+          `Logged -${amount} × ${target.portionLabel} of ${target.name} (${formatItemStockSummary(updatedPreview)})`,
+          'teal'
+        );
       } else {
-        notify(`Logged -${amount} portion of ${target.name} (${nextRemaining} left)`, 'teal');
+        notify(`Logged -${amount} of ${target.name} (${nextRemaining} left)`, 'teal');
       }
     },
     [notify]
@@ -403,8 +421,11 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
       const target = curr.items.find((i) => i.id === itemId);
       if (!target) return;
 
+      const clampedPct = Math.max(0, Math.min(100, Math.round(percent)));
       const nextRemaining =
-        percent === 0 ? 0 : Math.max(0.5, Number(((target.totalPortions * percent) / 100).toFixed(1)));
+        clampedPct === 0
+          ? 0
+          : Math.max(0.01, Number(((target.totalPortions * clampedPct) / 100).toFixed(2)));
       const storeName =
         curr.stores.find((s) => s.id === getLearnedStoreId(target))?.name ?? 'Shopping List';
 
@@ -412,7 +433,9 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
         const prevTarget = prev.items.find((i) => i.id === itemId);
         if (!prevTarget) return prev;
         const computedRem =
-          percent === 0 ? 0 : Math.max(0.5, Number(((prevTarget.totalPortions * percent) / 100).toFixed(1)));
+          clampedPct === 0
+            ? 0
+            : Math.max(0.01, Number(((prevTarget.totalPortions * clampedPct) / 100).toFixed(2)));
         const nowIso = new Date().toISOString();
         let nextShopping = prev.shoppingList;
         let avgDaysPerFullPack = prevTarget.avgDaysPerFullPack;
@@ -461,8 +484,13 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
 
       if (nextRemaining === 0 && target.autoAddOnEmpty) {
         notify(`${target.name} marked empty → added to ${storeName}!`, 'amber');
+      } else if (nextRemaining === 0) {
+        notify(`${target.name} marked empty`, 'amber');
+      } else if (target.containerSize && target.containerUnit) {
+        const approx = formatMeasuredAmount((target.containerSize * clampedPct) / 100, target.containerUnit);
+        notify(`${target.name} set to ${clampedPct}% (~${approx} left)`, 'teal');
       } else {
-        notify(`${target.name} set to ${percent}%`, 'teal');
+        notify(`${target.name} set to ${clampedPct}% (${getLevelWord(clampedPct)})`, 'teal');
       }
     },
     [notify]
@@ -485,7 +513,9 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
           prevTarget.lastRestockedAt,
           prevTarget.cycleCount
         );
-        const res = ensureOnShoppingList(prev.shoppingList, prevTarget, 'finished', 'essential');
+        const res = prevTarget.autoAddOnEmpty
+          ? ensureOnShoppingList(prev.shoppingList, prevTarget, 'finished', 'essential')
+          : { list: prev.shoppingList, added: false };
 
         return {
           ...prev,
@@ -514,7 +544,11 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
           ],
         };
       });
-      notify(`${target.name} finished → added to ${storeName} for next trip!`, 'amber');
+      if (target.autoAddOnEmpty) {
+        notify(`${target.name} finished → added to ${storeName} for next trip!`, 'amber');
+      } else {
+        notify(`${target.name} marked finished`, 'amber');
+      }
     },
     [notify]
   );
@@ -524,7 +558,6 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
       const curr = stateRef.current;
       const target = curr.items.find((i) => i.id === itemId);
       if (!target) return;
-      const newPortions = portions ?? target.totalPortions;
 
       setState((prev) => {
         const prevTarget = prev.items.find((i) => i.id === itemId);
@@ -564,7 +597,7 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
           ],
         };
       });
-      notify(`Restocked ${target.name} (+${newPortions} portions)`, 'teal');
+      notify(`Restocked ${target.name} (${formatRestockLabel(target)})`, 'teal');
     },
     [notify]
   );
@@ -610,7 +643,7 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
           if (patch.avgDaysPerFullPack !== undefined && Number.isFinite(patch.avgDaysPerFullPack)) {
             avgDays = Number(Math.max(1, Math.min(180, patch.avgDaysPerFullPack)).toFixed(1));
           } else if (patch.dailyBurnRate !== undefined && Number.isFinite(patch.dailyBurnRate)) {
-            const safeRate = Math.max(0.05, Math.min(50, patch.dailyBurnRate));
+            const safeRate = Math.max(0.05, Math.min(100, patch.dailyBurnRate));
             avgDays = Number(Math.max(1, Math.min(180, item.totalPortions / safeRate)).toFixed(1));
           }
 
@@ -709,7 +742,7 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
         curr.stores.find((s) => s.id === getLearnedStoreId(item))?.name ?? 'Shopping List';
       const note =
         item.remainingPortions > 0
-          ? `Added manually — currently have ${item.remainingPortions}/${item.totalPortions} left`
+          ? `Added manually — currently have ${formatItemStockSummary(item)}`
           : 'Added manually (out of stock)';
 
       setState((prev) => {
@@ -797,8 +830,11 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
               counts[ov.storeId] = (counts[ov.storeId] || 0) + 1;
               return {
                 ...item,
-                remainingPortions: Number((item.remainingPortions + ov.targetPortions).toFixed(1)),
-                totalPortions: Math.max(item.totalPortions, ov.targetPortions),
+                remainingPortions: Number((item.remainingPortions + ov.targetPortions).toFixed(2)),
+                totalPortions:
+                  item.trackingMode === 'continuous'
+                    ? item.totalPortions
+                    : Math.max(item.totalPortions, ov.targetPortions),
                 zone: ov.targetZone,
                 defaultStoreId: ov.storeId,
                 storePurchaseCounts: counts,
@@ -816,24 +852,40 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
             });
           } else {
             const newId = `item-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+            const inferred = inferProductDefaultsFromText(`${s.name} ${s.alias || ''}`);
+            const category = inferred?.category ?? 'pantry_staple';
+            const profile = getCategoryProfile(category);
+            const trackingMode = inferred?.trackingMode ?? profile.defaultTrackingMode;
+            const measured = parseMeasuredQuantity(s.quantityLabel);
+            const isContinuous = trackingMode === 'continuous';
+            const continuousStyle = isContinuous
+              ? measured
+                ? 'measured'
+                : inferred?.continuousStyle ?? profile.defaultContinuousStyle
+              : undefined;
+            const totalQty = isContinuous && continuousStyle === 'level_only' ? 100 : ov.targetPortions;
+
             nextItems.unshift({
               id: newId,
               name: s.name,
               alias: s.alias || '',
-              category: 'pantry_staple',
+              category,
               zone: ov.targetZone,
-              trackingMode: 'portioned',
-              totalPortions: ov.targetPortions,
-              remainingPortions: ov.targetPortions,
-              portionLabel: '1 portion',
+              trackingMode,
+              continuousStyle,
+              containerSize: isContinuous ? measured?.size : undefined,
+              containerUnit: isContinuous ? measured?.unit : undefined,
+              totalPortions: totalQty,
+              remainingPortions: totalQty,
+              portionLabel: isContinuous ? 'container' : profile.defaultPortionLabel,
               packDescription: s.quantityLabel || `${ov.targetPortions} portions`,
               proteinPerPortion: 0,
               defaultStoreId: ov.storeId,
               storePurchaseCounts: { [ov.storeId]: 1 },
-              avgDaysPerFullPack: 10,
+              avgDaysPerFullPack: profile.defaultAvgDays,
               cycleCount: 0,
               lastRestockedAt: nowIso,
-              autoAddOnEmpty: true,
+              autoAddOnEmpty: profile.defaultAutoAdd,
             });
           }
         }
@@ -1087,8 +1139,11 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
               counts[storeId] = (counts[storeId] || 0) + 1;
               return {
                 ...item,
-                remainingPortions: Number((item.remainingPortions + line.portionsToAdd).toFixed(1)),
-                totalPortions: Math.max(item.totalPortions, line.portionsToAdd),
+                remainingPortions: Number((item.remainingPortions + line.portionsToAdd).toFixed(2)),
+                totalPortions:
+                  item.trackingMode === 'continuous'
+                    ? item.totalPortions
+                    : Math.max(item.totalPortions, line.portionsToAdd),
                 zone: line.zone,
                 defaultStoreId: storeId,
                 storePurchaseCounts: counts,
@@ -1106,30 +1161,48 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
             });
           } else {
             const newId = `item-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+            const profile = getCategoryProfile(line.category);
+            const inferred = inferProductDefaultsFromText(`${line.name} ${line.alias}`);
+            const trackingMode = line.trackingMode ?? inferred?.trackingMode ?? profile.defaultTrackingMode;
+            const measured = parseMeasuredQuantity(line.packDescription) ?? parseMeasuredQuantity(line.name);
+            const isContinuous = trackingMode === 'continuous';
+            const continuousStyle = isContinuous
+              ? measured
+                ? 'measured'
+                : inferred?.continuousStyle ?? profile.defaultContinuousStyle
+              : undefined;
+            const totalQty =
+              isContinuous && continuousStyle === 'level_only'
+                ? 100
+                : Math.max(1, line.portionsToAdd || profile.defaultPortionCount);
+
             nextItems.unshift({
               id: newId,
               name: line.name.trim(),
               alias: line.alias.trim(),
               category: line.category,
               zone: line.zone,
-              trackingMode: 'portioned',
-              totalPortions: line.portionsToAdd,
-              remainingPortions: line.portionsToAdd,
-              portionLabel: line.portionLabel || '1 portion',
-              packDescription: line.packDescription || `${line.portionsToAdd} portions`,
+              trackingMode,
+              continuousStyle,
+              containerSize: isContinuous ? measured?.size : undefined,
+              containerUnit: isContinuous ? measured?.unit : undefined,
+              totalPortions: totalQty,
+              remainingPortions: totalQty,
+              portionLabel: line.portionLabel || (isContinuous ? 'container' : profile.defaultPortionLabel),
+              packDescription: line.packDescription || `${totalQty} portions`,
               proteinPerPortion: 0,
               defaultStoreId: storeId,
               storePurchaseCounts: { [storeId]: 1 },
-              avgDaysPerFullPack: 10,
+              avgDaysPerFullPack: profile.defaultAvgDays,
               cycleCount: 0,
               lastRestockedAt: nowIso,
-              autoAddOnEmpty: true,
+              autoAddOnEmpty: profile.defaultAutoAdd,
             });
             newEvents.unshift({
               id: `ev-${Date.now()}-${newId}`,
               itemId: newId,
               type: 'restock',
-              deltaPortions: line.portionsToAdd,
+              deltaPortions: totalQty,
               storeId,
               timestamp: nowIso,
               actor: prev.settings.activeUser,

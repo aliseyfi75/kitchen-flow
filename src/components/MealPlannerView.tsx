@@ -39,6 +39,7 @@ import {
   scoreRecipeAgainstInventory,
 } from '../utils/mealEngine';
 import { generateMealsWithGemini } from '../services/geminiEdge';
+import { getCategoryProfile, inferProductDefaultsFromText } from '../utils/productCategories';
 
 interface MealPlannerViewProps {
   items: InventoryItem[];
@@ -395,24 +396,33 @@ export const MealPlannerView: React.FC<MealPlannerViewProps> = ({
     const finalIngredients: RecipeIngredient[] = draftIngredients.map((d) => {
       if (d.isNewToInventory && d.addToInventory) {
         const newId = `item-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+        const inferred = inferProductDefaultsFromText(`${d.name} ${d.alias}`);
+        const cat = inferred?.category ?? 'pantry_staple';
+        const prof = getCategoryProfile(cat);
+        const mode = inferred?.trackingMode ?? prof.defaultTrackingMode;
+        const isCont = mode === 'continuous';
+        const totalQty = isCont ? 100 : Math.max(4, d.newRemainingStock || 4);
+        const remQty = isCont ? (d.newRemainingStock > 0 ? 100 : 0) : d.newRemainingStock;
+
         newInventoryItems.push({
           id: newId,
           name: d.name,
           alias: d.alias,
-          category: 'pantry_staple',
+          category: cat,
           zone: d.newZone,
-          trackingMode: 'portioned',
-          totalPortions: Math.max(4, d.newRemainingStock || 4),
-          remainingPortions: d.newRemainingStock,
-          portionLabel: d.portionLabel || '1 portion',
+          trackingMode: mode,
+          continuousStyle: isCont ? inferred?.continuousStyle ?? prof.defaultContinuousStyle : undefined,
+          totalPortions: totalQty,
+          remainingPortions: remQty,
+          portionLabel: d.portionLabel || (isCont ? 'container' : prof.defaultPortionLabel),
           packDescription: `Added via meal: ${recName.trim()}`,
           proteinPerPortion: 0,
           defaultStoreId: stores[0]?.id ?? 'store-superstore',
           storePurchaseCounts: { [stores[0]?.id ?? 'store-superstore']: 1 },
-          avgDaysPerFullPack: 10,
+          avgDaysPerFullPack: prof.defaultAvgDays,
           cycleCount: 0,
           lastRestockedAt: new Date().toISOString(),
-          autoAddOnEmpty: true,
+          autoAddOnEmpty: prof.defaultAutoAdd,
         });
         return {
           itemId: newId,

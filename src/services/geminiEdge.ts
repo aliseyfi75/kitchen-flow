@@ -84,6 +84,7 @@ export async function scanReceiptWithGemini(
       packDescription?: string;
       zone?: 'fridge' | 'freezer' | 'pantry';
       category?: InventoryItem['category'];
+      trackingMode?: InventoryItem['trackingMode'];
       price?: number;
     }[];
   }>({
@@ -111,11 +112,15 @@ export async function scanReceiptWithGemini(
         matchedItemId: match.item.id,
         name: match.item.name,
         alias: match.item.alias || line.alias || '',
-        portionsToAdd: line.portionsToAdd || match.item.totalPortions || 4,
+        portionsToAdd:
+          match.item.trackingMode === 'continuous'
+            ? match.item.totalPortions
+            : line.portionsToAdd || match.item.totalPortions || 4,
         portionLabel: match.item.portionLabel || line.portionLabel || '1 portion',
         packDescription: line.packDescription || match.item.packDescription || '1 pack',
         zone: match.item.zone,
         category: match.item.category,
+        trackingMode: match.item.trackingMode,
         price: line.price,
         included: true,
         confidence: match.confidence,
@@ -132,6 +137,7 @@ export async function scanReceiptWithGemini(
       packDescription: line.packDescription || '1 pack',
       zone: line.zone || 'fridge',
       category: line.category || 'pantry_staple',
+      trackingMode: line.trackingMode,
       price: line.price,
       included: true,
       confidence: 'new',

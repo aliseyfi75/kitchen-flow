@@ -1,26 +1,56 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  Archive,
   ArrowRight,
   Barcode,
+  Calendar,
   Camera,
   CheckCircle2,
+  Droplets,
+  Gauge,
+  Hash,
   Loader2,
+  Minus,
+  Plus,
   Search,
+  Snowflake,
+  Thermometer,
   Trash2,
   X,
 } from 'lucide-react';
 import {
   FoodCategory,
   InventoryItem,
+  MeasureUnit,
   NutritionFacts,
   StorageZone,
   Store,
-  TrackingMode,
   UILanguage,
 } from '../types/kitchen';
 import { CATEGORY_META, ZONE_META } from '../i18n/translations';
 import { lookupBarcodeFromOpenFoodFacts } from '../utils/barcodeLookup';
 import { scanNutritionLabelWithGemini } from '../services/geminiEdge';
+import {
+  ALL_MEASURE_UNITS,
+  getCategoryProfile,
+  isPerishableInZone,
+  MEASURE_UNIT_META,
+  MeasuredSizePreset,
+  PRODUCT_CATEGORIES,
+  PRODUCT_CATEGORY_ORDER,
+} from '../utils/productCategories';
+import {
+  CONTINUOUS_LEVEL_PRESETS,
+  formatMeasuredAmount,
+  getActiveLevelPreset,
+  getClampedStockPercent,
+  getLevelWord,
+  hasServingPourAction,
+  inferContinuousStyle,
+} from '../utils/inventoryDisplay';
+import { CategoryIcon } from './CategoryIcon';
+
+type EntryMode = 'portioned' | 'measured' | 'level_only';
 
 interface ItemModalProps {
   item: InventoryItem | null;
@@ -30,6 +60,20 @@ interface ItemModalProps {
   onClose: () => void;
   onSave: (item: InventoryItem, isNew: boolean) => void;
   onDelete?: (itemId: string) => void;
+}
+
+function getInitialEntryMode(item: InventoryItem | null): EntryMode {
+  if (!item) return 'portioned';
+  if (item.trackingMode === 'portioned') return 'portioned';
+  return inferContinuousStyle(item) === 'measured' ? 'measured' : 'level_only';
+}
+
+function addDaysToIsoDate(days: number): string {
+  const d = new Date(Date.now() + days * 86400000);
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 }
 
 export const ItemModal: React.FC<ItemModalProps> = ({
@@ -44,33 +88,72 @@ export const ItemModal: React.FC<ItemModalProps> = ({
   const isNew = !item;
   const labelInputRef = useRef<HTMLInputElement>(null);
 
-  // New items open directly on the fast Barcode-First step; editing opens the form directly
-  const [step, setStep] = useState<'barcode_first' | 'form'>(
-    isNew ? 'barcode_first' : 'form'
-  );
+  // New items open on the fast Barcode + Category Quick-Start step; editing opens the form directly
+  const [step, setStep] = useState<'barcode_first' | 'form'>(isNew ? 'barcode_first' : 'form');
   const [activeTab, setActiveTab] = useState<'basics' | 'nutrition'>(initialTab);
+
+  const initialCategory: FoodCategory = item?.category ?? 'dairy';
+  const initialProfile = getCategoryProfile(initialCategory);
 
   // Basics state
   const [name, setName] = useState(item?.name ?? '');
   const [alias, setAlias] = useState(item?.alias ?? '');
-  const [zone, setZone] = useState<StorageZone>(item?.zone ?? 'fridge');
-  const [category, setCategory] = useState<FoodCategory>(item?.category ?? 'protein');
-  const [trackingMode, setTrackingMode] = useState<TrackingMode>(item?.trackingMode ?? 'portioned');
-  const [totalPortions, setTotalPortions] = useState(item?.totalPortions ?? 6);
-  const [remainingPortions, setRemainingPortions] = useState(item?.remainingPortions ?? 6);
-  const [portionLabel, setPortionLabel] = useState(item?.portionLabel ?? '1 portion');
-  const [packDescription, setPackDescription] = useState(item?.packDescription ?? '1 pack');
+  const [zone, setZone] = useState<StorageZone>(item?.zone ?? initialProfile.defaultZone);
+  const [category, setCategory] = useState<FoodCategory>(initialCategory);
+  const [entryMode, setEntryMode] = useState<EntryMode>(() => getInitialEntryMode(item));
+
+  // Portioned / Countable state
+  const [totalPortions, setTotalPortions] = useState(
+    item?.trackingMode === 'portioned' ? item.totalPortions : initialProfile.defaultPortionCount
+  );
+  const [remainingPortions, setRemainingPortions] = useState(
+    item?.trackingMode === 'portioned' ? item.remainingPortions : initialProfile.defaultPortionCount
+  );
+  const [remainingManuallyEdited, setRemainingManuallyEdited] = useState(!isNew);
+  const [portionLabel, setPortionLabel] = useState(
+    item?.portionLabel && item.portionLabel !== 'container'
+      ? item.portionLabel
+      : initialProfile.defaultPortionLabel
+  );
+
+  // Continuous (Measured + Simple Level) state
+  const [containerSize, setContainerSize] = useState<number>(
+    item?.containerSize ?? initialProfile.measuredPresets[0]?.size ?? 1
+  );
+  const [containerUnit, setContainerUnit] = useState<MeasureUnit>(
+    item?.containerUnit ?? initialProfile.defaultUnit
+  );
+  const [levelPercent, setLevelPercent] = useState<number>(() =>
+    item ? getClampedStockPercent(item) : 100
+  );
+  const [levelEdited, setLevelEdited] = useState(false);
+  const [trackServings, setTrackServings] = useState<boolean>(() =>
+    item ? hasServingPourAction(item) : false
+  );
+  const [servingsPerContainer, setServingsPerContainer] = useState<number>(() => {
+    if (item && hasServingPourAction(item)) return item.totalPortions;
+    return initialProfile.measuredPresets[0]?.servingsPerContainer ?? 8;
+  });
+
+  // Shared packaging, store, cadence & freshness state
+  const [packDescription, setPackDescription] = useState(item?.packDescription ?? '');
   const [defaultStoreId, setDefaultStoreId] = useState(
     item?.defaultStoreId ?? stores[0]?.id ?? 'store-costco'
   );
-  const [avgDaysPerFullPack, setAvgDaysPerFullPack] = useState(item?.avgDaysPerFullPack ?? 10);
+  const [avgDaysPerFullPack, setAvgDaysPerFullPack] = useState(
+    item?.avgDaysPerFullPack ?? initialProfile.defaultAvgDays
+  );
   const [expiresAt, setExpiresAt] = useState(item?.expiresAt ? item.expiresAt.slice(0, 10) : '');
   const [notes, setNotes] = useState(item?.notes ?? '');
-  const [autoAddOnEmpty, setAutoAddOnEmpty] = useState(item?.autoAddOnEmpty ?? true);
+  const [autoAddOnEmpty, setAutoAddOnEmpty] = useState(
+    item?.autoAddOnEmpty ?? initialProfile.defaultAutoAdd
+  );
 
   // Nutrition Facts state
   const initNut = item?.nutrition;
-  const [servingSizeLabel, setServingSizeLabel] = useState(initNut?.servingSizeLabel ?? portionLabel);
+  const [servingSizeLabel, setServingSizeLabel] = useState(
+    initNut?.servingSizeLabel ?? portionLabel
+  );
   const [calories, setCalories] = useState(initNut?.calories ?? 0);
   const [protein, setProtein] = useState(initNut?.protein ?? item?.proteinPerPortion ?? 0);
   const [sugar, setSugar] = useState(initNut?.sugar ?? 0);
@@ -102,6 +185,9 @@ export const ItemModal: React.FC<ItemModalProps> = ({
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
+  const profile = getCategoryProfile(category);
+  const perishable = isPerishableInZone(category, zone);
+
   const stopCamera = () => {
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((tr) => tr.stop());
@@ -117,6 +203,86 @@ export const ItemModal: React.FC<ItemModalProps> = ({
       }
     };
   }, []);
+
+  /** Applies category-tailored smart defaults (tracking style, presets, shelf life, zone). */
+  const applyCategoryDefaults = (nextCat: FoodCategory, forceZoneAndMode = true) => {
+    const prof = getCategoryProfile(nextCat);
+    setCategory(nextCat);
+    if (forceZoneAndMode) {
+      setZone(prof.defaultZone);
+      const nextMode: EntryMode =
+        prof.defaultTrackingMode === 'portioned'
+          ? 'portioned'
+          : prof.defaultContinuousStyle === 'measured'
+          ? 'measured'
+          : 'level_only';
+      setEntryMode(nextMode);
+      setAvgDaysPerFullPack(prof.defaultAvgDays);
+      setAutoAddOnEmpty(prof.defaultAutoAdd);
+
+      if (nextMode === 'portioned') {
+        setTotalPortions(prof.defaultPortionCount);
+        setRemainingPortions(prof.defaultPortionCount);
+        setRemainingManuallyEdited(false);
+        setPortionLabel(prof.defaultPortionLabel);
+        setPackDescription('');
+      } else if (nextMode === 'measured') {
+        const firstPreset = prof.measuredPresets[0];
+        setContainerSize(firstPreset?.size ?? 1);
+        setContainerUnit(firstPreset?.unit ?? prof.defaultUnit);
+        setPackDescription(firstPreset?.packDesc ?? '');
+        setLevelPercent(100);
+        if (firstPreset?.servingLabel && firstPreset?.servingsPerContainer) {
+          setTrackServings(true);
+          setPortionLabel(firstPreset.servingLabel);
+          setServingsPerContainer(firstPreset.servingsPerContainer);
+        } else {
+          setTrackServings(false);
+          setPortionLabel(prof.defaultPortionLabel);
+        }
+      } else {
+        setPackDescription(prof.levelPackPresets[0] ?? '1 container');
+        setLevelPercent(100);
+        setTrackServings(false);
+      }
+    }
+  };
+
+  const applyMeasuredPreset = (preset: MeasuredSizePreset) => {
+    setContainerSize(preset.size);
+    setContainerUnit(preset.unit);
+    setPackDescription(preset.packDesc);
+    if (preset.servingLabel && preset.servingsPerContainer) {
+      setTrackServings(true);
+      setPortionLabel(preset.servingLabel);
+      setServingsPerContainer(preset.servingsPerContainer);
+    }
+  };
+
+  const handleSwitchEntryMode = (nextMode: EntryMode) => {
+    setEntryMode(nextMode);
+    if (nextMode === 'portioned') {
+      if (totalPortions === 100 || totalPortions < 1) {
+        setTotalPortions(profile.defaultPortionCount);
+        setRemainingPortions(profile.defaultPortionCount);
+        setRemainingManuallyEdited(false);
+      }
+      if (!portionLabel || portionLabel === 'container') {
+        setPortionLabel(profile.defaultPortionLabel);
+      }
+    } else if (nextMode === 'measured') {
+      if (!containerSize || containerSize <= 0) {
+        const first = profile.measuredPresets[0];
+        setContainerSize(first?.size ?? 1);
+        setContainerUnit(first?.unit ?? profile.defaultUnit);
+      }
+    } else {
+      setTrackServings(false);
+      if (!packDescription.trim()) {
+        setPackDescription(profile.levelPackPresets[0] ?? '1 container');
+      }
+    }
+  };
 
   const applyScannedNutrition = (scanned: NutritionFacts) => {
     setServingSizeLabel(scanned.servingSizeLabel ?? portionLabel);
@@ -146,13 +312,33 @@ export const ItemModal: React.FC<ItemModalProps> = ({
 
     if (result.found && result.nutrition) {
       applyScannedNutrition(result.nutrition);
+
+      if (result.suggestedCategory && advanceToForm) {
+        applyCategoryDefaults(result.suggestedCategory, true);
+      }
+      if (result.suggestedZone && advanceToForm) {
+        setZone(result.suggestedZone);
+      }
       if (result.productName && (!name.trim() || advanceToForm)) {
         setName(result.productName);
       }
-      if (result.quantity && (packDescription === '1 pack' || advanceToForm)) {
+      if (result.quantity && (!packDescription.trim() || advanceToForm)) {
         setPackDescription(result.quantity);
       }
-      if (result.nutrition.servingSizeLabel && (portionLabel === '1 portion' || advanceToForm)) {
+      if (result.measuredQuantity && advanceToForm) {
+        setEntryMode('measured');
+        setContainerSize(result.measuredQuantity.size);
+        setContainerUnit(result.measuredQuantity.unit);
+      } else if (result.suggestedTrackingMode && advanceToForm) {
+        setEntryMode(
+          result.suggestedTrackingMode === 'portioned'
+            ? 'portioned'
+            : result.suggestedContinuousStyle === 'measured'
+            ? 'measured'
+            : 'level_only'
+        );
+      }
+      if (result.nutrition.servingSizeLabel) {
         setPortionLabel(result.nutrition.servingSizeLabel);
       }
       setScanSuccessMsg(
@@ -164,7 +350,8 @@ export const ItemModal: React.FC<ItemModalProps> = ({
       }
     } else {
       setBarcodeError(
-        result.error || 'Product not found — you can skip to enter manually or scan the nutrition label.'
+        result.error ||
+          'Product not found — pick a category below to enter manually or scan the nutrition label.'
       );
     }
   };
@@ -181,7 +368,7 @@ export const ItemModal: React.FC<ItemModalProps> = ({
 
     if (!BarcodeDetectorCtor || !navigator.mediaDevices?.getUserMedia) {
       setBarcodeError(
-        'Live camera barcode detection requires Chrome/Android or Safari with BarcodeDetector — enter the barcode below or skip to fill manually.'
+        'Live camera barcode detection requires Chrome/Android or Safari with BarcodeDetector — enter the barcode below or pick a category.'
       );
       return;
     }
@@ -223,7 +410,9 @@ export const ItemModal: React.FC<ItemModalProps> = ({
       };
       window.setTimeout(poll, 500);
     } catch {
-      setBarcodeError('Camera permission denied or unavailable. Type the barcode number below or skip.');
+      setBarcodeError(
+        'Camera permission denied or unavailable. Type the barcode number below or pick a category.'
+      );
     }
   };
 
@@ -263,7 +452,7 @@ export const ItemModal: React.FC<ItemModalProps> = ({
 
     const nutrition: NutritionFacts | undefined = hasNutrition
       ? {
-          servingSizeLabel: servingSizeLabel.trim() || portionLabel,
+          servingSizeLabel: servingSizeLabel.trim() || portionLabel || '1 serving',
           calories: Math.max(0, Number(calories) || 0),
           protein: Math.max(0, Number(protein) || 0),
           sugar: Math.max(0, Number(sugar) || 0),
@@ -286,22 +475,95 @@ export const ItemModal: React.FC<ItemModalProps> = ({
         }
       : undefined;
 
+    let finalTrackingMode: InventoryItem['trackingMode'] = 'portioned';
+    let finalContinuousStyle: InventoryItem['continuousStyle'] = undefined;
+    let finalContainerSize: number | undefined = undefined;
+    let finalContainerUnit: MeasureUnit | undefined = undefined;
+    let finalTotalPortions = 1;
+    let finalRemainingPortions = 1;
+    let finalPortionLabel = portionLabel.trim() || profile.defaultPortionLabel;
+    let finalPackDescription = packDescription.trim();
+
+    if (entryMode === 'portioned') {
+      finalTrackingMode = 'portioned';
+      finalTotalPortions = Math.max(1, Number(totalPortions) || 1);
+      finalRemainingPortions = Math.max(0, Number(remainingPortions) || 0);
+      if (!finalPackDescription) {
+        finalPackDescription = `${finalTotalPortions} × ${finalPortionLabel}`;
+      }
+    } else if (entryMode === 'measured') {
+      finalTrackingMode = 'continuous';
+      finalContinuousStyle = 'measured';
+      finalContainerSize = Math.max(0.05, Number(containerSize) || 1);
+      finalContainerUnit = containerUnit;
+      if (trackServings) {
+        finalTotalPortions = Math.max(2, Number(servingsPerContainer) || 8);
+        finalPortionLabel = portionLabel.trim() || '1 serving';
+      } else {
+        finalTotalPortions = 100;
+        finalPortionLabel = 'container';
+      }
+
+      // Preserve over-stocked backup containers if editing other fields without touching the level slider
+      if (
+        !levelEdited &&
+        item &&
+        item.trackingMode === 'continuous' &&
+        item.remainingPortions > item.totalPortions &&
+        item.totalPortions === finalTotalPortions
+      ) {
+        finalRemainingPortions = item.remainingPortions;
+      } else {
+        finalRemainingPortions =
+          levelPercent === 0
+            ? 0
+            : Math.max(0.01, Number(((finalTotalPortions * levelPercent) / 100).toFixed(2)));
+      }
+
+      if (!finalPackDescription) {
+        finalPackDescription = formatMeasuredAmount(finalContainerSize, finalContainerUnit);
+      }
+    } else {
+      // Simple Level (spices, sauces, herbs, bottles)
+      finalTrackingMode = 'continuous';
+      finalContinuousStyle = 'level_only';
+      finalTotalPortions = 100;
+      finalPortionLabel = 'container';
+      if (
+        !levelEdited &&
+        item &&
+        item.trackingMode === 'continuous' &&
+        item.remainingPortions > item.totalPortions &&
+        item.totalPortions === 100
+      ) {
+        finalRemainingPortions = item.remainingPortions;
+      } else {
+        finalRemainingPortions = Math.max(0, Math.min(100, Math.round(levelPercent)));
+      }
+      if (!finalPackDescription) {
+        finalPackDescription = profile.levelPackPresets[0] ?? '1 container';
+      }
+    }
+
     const built: InventoryItem = {
       id: item?.id ?? `item-${Date.now()}`,
       name: name.trim(),
       alias: alias.trim(),
       zone,
       category,
-      trackingMode,
-      totalPortions: Math.max(1, Number(totalPortions) || 1),
-      remainingPortions: Math.max(0, Number(remainingPortions) || 0),
-      portionLabel: portionLabel.trim() || '1 portion',
-      packDescription: packDescription.trim() || `${totalPortions} portions`,
+      trackingMode: finalTrackingMode,
+      continuousStyle: finalContinuousStyle,
+      containerSize: finalContainerSize,
+      containerUnit: finalContainerUnit,
+      totalPortions: finalTotalPortions,
+      remainingPortions: finalRemainingPortions,
+      portionLabel: finalPortionLabel,
+      packDescription: finalPackDescription,
       proteinPerPortion: Math.max(0, Number(protein) || 0),
       nutrition,
       defaultStoreId,
       storePurchaseCounts: item?.storePurchaseCounts ?? { [defaultStoreId]: 1 },
-      avgDaysPerFullPack: Math.max(1, Number(avgDaysPerFullPack) || 7),
+      avgDaysPerFullPack: Math.max(1, Number(avgDaysPerFullPack) || profile.defaultAvgDays),
       cycleCount: item?.cycleCount ?? 0,
       lastRestockedAt: item?.lastRestockedAt ?? new Date().toISOString(),
       lastUsedAt: item?.lastUsedAt,
@@ -313,23 +575,47 @@ export const ItemModal: React.FC<ItemModalProps> = ({
     onClose();
   };
 
+  const activePresetPct = getActiveLevelPreset(levelPercent);
+  const measuredRemainingNow = formatMeasuredAmount(
+    Math.max(0, (Number(containerSize) || 0) * (levelPercent / 100)),
+    containerUnit
+  );
+  const measuredTotalNow = formatMeasuredAmount(Math.max(0, Number(containerSize) || 0), containerUnit);
+
+  const levelToneColor =
+    levelPercent <= 15
+      ? 'bg-rose-500'
+      : levelPercent <= 38
+      ? 'bg-amber-500'
+      : 'bg-teal-600';
+
+  const unitOptions: MeasureUnit[] = [
+    ...profile.allowedUnits,
+    ...ALL_MEASURE_UNITS.filter((u) => !profile.allowedUnits.includes(u)),
+  ];
+
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-stone-950/50 backdrop-blur-xs p-0 sm:p-4">
-      <div className="w-full max-w-lg max-h-[92dvh] flex flex-col rounded-t-3xl sm:rounded-3xl bg-white shadow-2xl border border-stone-200 overflow-hidden safe-bottom">
+      <div className="w-full max-w-xl max-h-[92dvh] flex flex-col rounded-t-3xl sm:rounded-3xl bg-white shadow-2xl border border-stone-200 overflow-hidden safe-bottom">
         {/* Modal Header */}
         <div className="px-5 pt-4 pb-3 bg-white border-b border-stone-100 space-y-3 shrink-0">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-bold text-stone-900">
-              {step === 'barcode_first'
-                ? lang === 'fa'
-                  ? 'اسکن بارکد کالا'
-                  : 'Scan Barcode to Add Item'
-                : isNew
-                ? lang === 'fa'
-                  ? 'افزودن ماده غذایی'
-                  : 'Add Kitchen Item'
-                : item.name}
-            </h2>
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <h2 className="text-lg font-bold text-stone-900 leading-tight">
+                {step === 'barcode_first'
+                  ? lang === 'fa'
+                    ? 'افزودن ماده غذایی جدید'
+                    : 'Add Kitchen Item'
+                  : isNew
+                  ? `${profile.en}`
+                  : item.name}
+              </h2>
+              {step === 'barcode_first' && (
+                <p className="text-xs text-stone-500 mt-0.5">
+                  Scan a barcode or pick a product type for tailored fields
+                </p>
+              )}
+            </div>
             <button
               type="button"
               onClick={() => {
@@ -353,7 +639,7 @@ export const ItemModal: React.FC<ItemModalProps> = ({
                     : 'text-stone-500 hover:text-stone-800'
                 }`}
               >
-                Stock & Portions
+                Stock &amp; Tracking
               </button>
               <button
                 type="button"
@@ -365,50 +651,53 @@ export const ItemModal: React.FC<ItemModalProps> = ({
                 }`}
               >
                 <Camera className="w-3.5 h-3.5" />
-                Nutrition Facts & Scan
+                Nutrition Facts &amp; Scan
               </button>
             </div>
           )}
         </div>
 
-        {/* STEP 1 FOR NEW ITEMS: BARCODE SCANNER FIRST */}
+        {/* STEP 1 FOR NEW ITEMS: FAST BARCODE + CATEGORY PICKER */}
         {step === 'barcode_first' ? (
           <div className="flex-1 overflow-y-auto p-5 space-y-5">
-            <div className="rounded-3xl border-2 border-dashed border-indigo-200 bg-indigo-50/45 p-5 text-center space-y-3.5">
-              <div className="w-14 h-14 rounded-2xl bg-indigo-700 text-white flex items-center justify-center mx-auto shadow-sm">
-                <Barcode className="w-7 h-7" />
-              </div>
-              <div>
-                <h3 className="text-base font-bold text-stone-900">
-                  Scan product barcode to auto-fill everything
-                </h3>
-                <p className="text-xs text-stone-600 mt-1">
-                  Loads product name, serving size, protein, sugar, fiber & micronutrients automatically from Open Food Facts.
-                </p>
+            {/* Compact Barcode Scanner Box */}
+            <div className="rounded-2xl border border-indigo-200/90 bg-indigo-50/45 p-4 space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="w-9 h-9 rounded-xl bg-indigo-700 text-white flex items-center justify-center shrink-0">
+                    <Barcode className="w-5 h-5" />
+                  </div>
+                  <div className="min-w-0">
+                    <h3 className="text-xs sm:text-sm font-bold text-stone-900 leading-tight">
+                      Have a barcode? Auto-fill everything
+                    </h3>
+                    <p className="text-[11px] text-stone-600 truncate">
+                      Loads name, container size &amp; nutrition from Open Food Facts
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() =>
+                    cameraActive ? stopCamera() : startLiveBarcodeCamera(true)
+                  }
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-indigo-700 hover:bg-indigo-800 text-white px-3 py-2 text-xs font-bold shadow-xs transition shrink-0"
+                >
+                  <Camera className="w-3.5 h-3.5" />
+                  {cameraActive ? 'Stop' : 'Scan'}
+                </button>
               </div>
 
               {cameraActive && (
-                <div className="rounded-2xl overflow-hidden border border-indigo-300 bg-black relative">
-                  <video ref={videoRef} playsInline muted className="w-full h-48 object-cover" />
+                <div className="rounded-xl overflow-hidden border border-indigo-300 bg-black relative">
+                  <video ref={videoRef} playsInline muted className="w-full h-44 object-cover" />
                   <div className="absolute inset-x-6 top-1/2 h-0.5 bg-teal-400 shadow" />
                 </div>
               )}
 
-              <button
-                type="button"
-                onClick={() =>
-                  cameraActive ? stopCamera() : startLiveBarcodeCamera(true)
-                }
-                className="w-full inline-flex items-center justify-center gap-2 rounded-2xl bg-indigo-700 hover:bg-indigo-800 text-white py-3 px-4 text-sm font-bold shadow-xs transition"
-              >
-                <Camera className="w-4 h-4" />
-                {cameraActive ? 'Stop Camera' : 'Open Camera Barcode Scanner'}
-              </button>
-
-              {/* Manual UPC input */}
-              <div className="flex items-center gap-2 pt-1">
+              <div className="flex items-center gap-2">
                 <div className="relative flex-1">
-                  <Search className="w-4 h-4 text-stone-400 absolute top-1/2 -translate-y-1/2 left-3" />
+                  <Search className="w-3.5 h-3.5 text-stone-400 absolute top-1/2 -translate-y-1/2 left-3" />
                   <input
                     value={barcodeInput}
                     onChange={(e) => setBarcodeInput(e.target.value)}
@@ -419,14 +708,14 @@ export const ItemModal: React.FC<ItemModalProps> = ({
                       }
                     }}
                     placeholder="Or type / paste UPC barcode..."
-                    className="w-full rounded-xl border border-indigo-200 bg-white pl-9 pr-3 py-2.5 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    className="w-full rounded-xl border border-indigo-200 bg-white pl-8 pr-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   />
                 </div>
                 <button
                   type="button"
                   disabled={isLookingUpBarcode || !barcodeInput.trim()}
                   onClick={() => runBarcodeLookup(barcodeInput, true)}
-                  className="inline-flex items-center gap-1.5 rounded-xl bg-stone-900 hover:bg-stone-800 disabled:opacity-45 text-white px-4 py-2.5 text-xs font-bold shrink-0"
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-stone-900 hover:bg-stone-800 disabled:opacity-45 text-white px-3.5 py-2 text-xs font-bold shrink-0"
                 >
                   {isLookingUpBarcode ? (
                     <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -435,53 +724,74 @@ export const ItemModal: React.FC<ItemModalProps> = ({
                   )}
                 </button>
               </div>
+
+              {barcodeError && (
+                <div className="rounded-xl bg-amber-50 border border-amber-200 px-3 py-2 text-[11px] text-amber-900">
+                  {barcodeError}
+                </div>
+              )}
             </div>
 
-            {barcodeError && (
-              <div className="rounded-2xl bg-amber-50 border border-amber-200 p-3 text-xs text-amber-900 space-y-2">
-                <div>{barcodeError}</div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    stopCamera();
-                    setStep('form');
-                    setActiveTab('basics');
-                  }}
-                  className="inline-flex items-center gap-1 font-bold text-amber-950 underline"
-                >
-                  Continue to manual entry →
-                </button>
+            {/* Category Quick-Start Grid */}
+            <div className="space-y-2.5">
+              <div className="flex items-center justify-between">
+                <h3 className="text-xs font-bold uppercase tracking-wider text-stone-500">
+                  Or pick what you&apos;re adding
+                </h3>
+                <span className="text-[11px] text-stone-400">Sets zone &amp; tracking style</span>
               </div>
-            )}
 
-            {/* Clear Skip to Manual Form */}
-            <div className="flex items-center justify-between gap-3 pt-2 border-t border-stone-100">
-              <button
-                type="button"
-                onClick={() => {
-                  stopCamera();
-                  onClose();
-                }}
-                className="px-4 py-2.5 rounded-xl text-xs font-semibold text-stone-500 hover:bg-stone-100"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  stopCamera();
-                  setStep('form');
-                  setActiveTab('basics');
-                }}
-                className="inline-flex items-center gap-1.5 rounded-xl bg-stone-100 hover:bg-stone-200 text-stone-900 px-4 py-2.5 text-xs font-bold transition"
-              >
-                Skip — Fill Manually
-                <ArrowRight className="w-4 h-4" />
-              </button>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {PRODUCT_CATEGORY_ORDER.map((catKey) => {
+                  const prof = PRODUCT_CATEGORIES[catKey];
+                  const modeTag =
+                    prof.defaultTrackingMode === 'portioned'
+                      ? 'Count'
+                      : prof.defaultContinuousStyle === 'measured'
+                      ? 'Liquid / Bulk'
+                      : 'Simple Level';
+                  return (
+                    <button
+                      key={catKey}
+                      type="button"
+                      onClick={() => {
+                        stopCamera();
+                        applyCategoryDefaults(catKey, true);
+                        setStep('form');
+                        setActiveTab('basics');
+                      }}
+                      className="group rounded-2xl border border-stone-200/90 hover:border-teal-500 hover:bg-teal-50/40 bg-white p-3 text-left transition flex items-start gap-3 shadow-2xs"
+                    >
+                      <div className="w-9 h-9 rounded-xl bg-stone-100 group-hover:bg-teal-700 group-hover:text-white text-stone-700 flex items-center justify-center shrink-0 transition">
+                        <CategoryIcon category={catKey} className="w-4 h-4" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center justify-between gap-1">
+                          <span className="text-xs font-bold text-stone-900 truncate">
+                            {prof.en}
+                          </span>
+                          <ArrowRight className="w-3.5 h-3.5 text-stone-300 group-hover:text-teal-700 shrink-0 transition" />
+                        </div>
+                        <p className="text-[11px] text-stone-500 line-clamp-1 mt-0.5">
+                          {prof.examplesEn}
+                        </p>
+                        <div className="flex items-center gap-1.5 mt-1.5 text-[10px] font-semibold">
+                          <span className="px-1.5 py-0.5 rounded bg-stone-100 text-stone-600">
+                            {ZONE_META[prof.defaultZone][lang]}
+                          </span>
+                          <span className="px-1.5 py-0.5 rounded bg-teal-50 text-teal-800">
+                            {modeTag}
+                          </span>
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           </div>
         ) : (
-          /* STEP 2 (OR EDIT): FULL ITEM FORM + NUTRITION TAB */
+          /* STEP 2 (OR EDIT): TAILORED MULTI-SECTION FORM + NUTRITION TAB */
           <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-5 space-y-4">
             {scanSuccessMsg && (
               <div className="flex items-start gap-2 text-xs font-semibold text-emerald-900 bg-emerald-50 border border-emerald-200 rounded-2xl px-3.5 py-2.5">
@@ -492,186 +802,789 @@ export const ItemModal: React.FC<ItemModalProps> = ({
 
             {activeTab === 'basics' ? (
               <>
+                {/* 1. Product Name & Alias */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs font-medium text-stone-600 mb-1">
-                      Primary Name (EN or FA) *
+                    <label className="block text-xs font-semibold text-stone-700 mb-1">
+                      Product Name *
                     </label>
                     <input
                       dir="auto"
                       required
                       value={name}
                       onChange={(e) => setName(e.target.value)}
-                      placeholder="e.g. Chicken Breast"
+                      placeholder={profile.namePlaceholder}
                       className="w-full rounded-xl border border-stone-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-medium text-stone-600 mb-1">
+                    <label className="block text-xs font-semibold text-stone-600 mb-1">
                       Secondary Alias (Persian / English)
                     </label>
                     <input
                       dir="auto"
                       value={alias}
                       onChange={(e) => setAlias(e.target.value)}
-                      placeholder="مثلاً سینه مرغ"
+                      placeholder={profile.aliasPlaceholder}
                       className="w-full rounded-xl border border-stone-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
                     />
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                {/* 2. Storage Zone Pills + Category + Store */}
+                <div className="space-y-3">
                   <div>
-                    <label className="block text-xs font-medium text-stone-600 mb-1">Storage Zone</label>
-                    <select
-                      value={zone}
-                      onChange={(e) => setZone(e.target.value as StorageZone)}
-                      className="w-full rounded-xl border border-stone-200 px-3 py-2 text-sm bg-white"
+                    <label className="block text-xs font-semibold text-stone-600 mb-1.5">
+                      Storage Zone
+                    </label>
+                    <div className="grid grid-cols-3 gap-2">
+                      {(
+                        [
+                          { id: 'fridge', icon: <Thermometer className="w-3.5 h-3.5" /> },
+                          { id: 'freezer', icon: <Snowflake className="w-3.5 h-3.5" /> },
+                          { id: 'pantry', icon: <Archive className="w-3.5 h-3.5" /> },
+                        ] as const
+                      ).map((z) => {
+                        const active = zone === z.id;
+                        return (
+                          <button
+                            key={z.id}
+                            type="button"
+                            onClick={() => setZone(z.id)}
+                            className={`inline-flex items-center justify-center gap-1.5 py-2 rounded-xl text-xs font-semibold border transition ${
+                              active
+                                ? 'bg-stone-900 text-white border-stone-900 shadow-2xs'
+                                : 'bg-white text-stone-600 border-stone-200 hover:bg-stone-50'
+                            }`}
+                          >
+                            {z.icon}
+                            {ZONE_META[z.id][lang]}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-stone-600 mb-1">
+                        Category
+                      </label>
+                      <select
+                        value={category}
+                        onChange={(e) =>
+                          applyCategoryDefaults(e.target.value as FoodCategory, isNew)
+                        }
+                        className="w-full rounded-xl border border-stone-200 px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-teal-500"
+                      >
+                        {PRODUCT_CATEGORY_ORDER.map((c) => (
+                          <option key={c} value={c}>
+                            {CATEGORY_META[c][lang]}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-stone-600 mb-1">
+                        Preferred Store
+                      </label>
+                      <select
+                        value={defaultStoreId}
+                        onChange={(e) => setDefaultStoreId(e.target.value)}
+                        className="w-full rounded-xl border border-stone-200 px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-teal-500"
+                      >
+                        {stores.map((s) => (
+                          <option key={s.id} value={s.id}>
+                            {s.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 3. How Do You Track This Product? — 3 Distinct Entry Modes */}
+                <div className="space-y-2.5 pt-1">
+                  <label className="block text-xs font-bold text-stone-700">
+                    How do you track stock for this product?
+                  </label>
+                  <div className="grid grid-cols-3 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleSwitchEntryMode('portioned')}
+                      className={`rounded-2xl border p-2.5 text-left transition ${
+                        entryMode === 'portioned'
+                          ? 'border-teal-600 bg-teal-50/80 text-teal-950 shadow-2xs'
+                          : 'border-stone-200 bg-white text-stone-600 hover:bg-stone-50'
+                      }`}
                     >
-                      {(Object.keys(ZONE_META) as StorageZone[]).map((z) => (
-                        <option key={z} value={z}>
-                          {ZONE_META[z][lang]}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-stone-600 mb-1">Category</label>
-                    <select
-                      value={category}
-                      onChange={(e) => setCategory(e.target.value as FoodCategory)}
-                      className="w-full rounded-xl border border-stone-200 px-3 py-2 text-sm bg-white"
+                      <div className="flex items-center gap-1.5 font-bold text-xs">
+                        <Hash className="w-3.5 h-3.5 text-teal-700 shrink-0" />
+                        <span>Count</span>
+                      </div>
+                      <div className="text-[10px] opacity-80 mt-0.5 leading-snug">
+                        Bags, eggs, fillets, cans
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => handleSwitchEntryMode('measured')}
+                      className={`rounded-2xl border p-2.5 text-left transition ${
+                        entryMode === 'measured'
+                          ? 'border-teal-600 bg-teal-50/80 text-teal-950 shadow-2xs'
+                          : 'border-stone-200 bg-white text-stone-600 hover:bg-stone-50'
+                      }`}
                     >
-                      {(Object.keys(CATEGORY_META) as FoodCategory[]).map((c) => (
-                        <option key={c} value={c}>
-                          {CATEGORY_META[c][lang]}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="col-span-2 sm:col-span-1">
-                    <label className="block text-xs font-medium text-stone-600 mb-1">Preferred Store</label>
-                    <select
-                      value={defaultStoreId}
-                      onChange={(e) => setDefaultStoreId(e.target.value)}
-                      className="w-full rounded-xl border border-stone-200 px-3 py-2 text-sm bg-white"
+                      <div className="flex items-center gap-1.5 font-bold text-xs">
+                        <Droplets className="w-3.5 h-3.5 text-teal-700 shrink-0" />
+                        <span>Liquid / Bulk</span>
+                      </div>
+                      <div className="text-[10px] opacity-80 mt-0.5 leading-snug">
+                        Milk (4L), yogurt, rice, oil
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => handleSwitchEntryMode('level_only')}
+                      className={`rounded-2xl border p-2.5 text-left transition ${
+                        entryMode === 'level_only'
+                          ? 'border-teal-600 bg-teal-50/80 text-teal-950 shadow-2xs'
+                          : 'border-stone-200 bg-white text-stone-600 hover:bg-stone-50'
+                      }`}
                     >
-                      {stores.map((s) => (
-                        <option key={s.id} value={s.id}>
-                          {s.name}
-                        </option>
-                      ))}
-                    </select>
+                      <div className="flex items-center gap-1.5 font-bold text-xs">
+                        <Gauge className="w-3.5 h-3.5 text-teal-700 shrink-0" />
+                        <span>Simple Level</span>
+                      </div>
+                      <div className="text-[10px] opacity-80 mt-0.5 leading-snug">
+                        Spices, sauces, herbs, jars
+                      </div>
+                    </button>
                   </div>
+
+                  {/* ========================================================== */}
+                  {/* ENTRY SECTION A: COUNT / PORTIONS                          */}
+                  {/* ========================================================== */}
+                  {entryMode === 'portioned' && (
+                    <div className="rounded-2xl border border-stone-200 bg-stone-50/70 p-4 space-y-3.5">
+                      {/* Quick Unit Chips */}
+                      <div>
+                        <div className="text-[11px] font-semibold text-stone-500 mb-1.5">
+                          Quick unit for {profile.shortEn}:
+                        </div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {profile.portionUnitPresets.map((preset) => (
+                            <button
+                              key={preset}
+                              type="button"
+                              onClick={() => setPortionLabel(preset)}
+                              className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition ${
+                                portionLabel === preset
+                                  ? 'bg-teal-700 text-white border-teal-700'
+                                  : 'bg-white text-stone-700 border-stone-200 hover:border-teal-400'
+                              }`}
+                            >
+                              {preset}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-xs font-semibold text-stone-700 mb-1">
+                            Full Pack Count
+                          </label>
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const next = Math.max(1, totalPortions - 1);
+                                setTotalPortions(next);
+                                if (!remainingManuallyEdited) setRemainingPortions(next);
+                              }}
+                              className="p-2 rounded-xl border border-stone-200 bg-white hover:bg-stone-100 text-stone-700"
+                              aria-label="Decrease full pack count"
+                            >
+                              <Minus className="w-3.5 h-3.5" />
+                            </button>
+                            <input
+                              type="number"
+                              step="0.5"
+                              min="1"
+                              value={totalPortions}
+                              onChange={(e) => {
+                                const next = Number(e.target.value);
+                                setTotalPortions(next);
+                                if (!remainingManuallyEdited) setRemainingPortions(next);
+                              }}
+                              className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm font-bold text-center"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const next = totalPortions + 1;
+                                setTotalPortions(next);
+                                if (!remainingManuallyEdited) setRemainingPortions(next);
+                              }}
+                              className="p-2 rounded-xl border border-stone-200 bg-white hover:bg-stone-100 text-stone-700"
+                              aria-label="Increase full pack count"
+                            >
+                              <Plus className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-semibold text-stone-700 mb-1">
+                            In Stock Now
+                          </label>
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setRemainingManuallyEdited(true);
+                                setRemainingPortions(Math.max(0, Number((remainingPortions - 1).toFixed(1))));
+                              }}
+                              className="p-2 rounded-xl border border-stone-200 bg-white hover:bg-stone-100 text-stone-700"
+                              aria-label="Decrease in stock"
+                            >
+                              <Minus className="w-3.5 h-3.5" />
+                            </button>
+                            <input
+                              type="number"
+                              step="0.5"
+                              min="0"
+                              value={remainingPortions}
+                              onChange={(e) => {
+                                setRemainingManuallyEdited(true);
+                                setRemainingPortions(Number(e.target.value));
+                              }}
+                              className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm font-bold text-center text-teal-800"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setRemainingManuallyEdited(true);
+                                setRemainingPortions(Number((remainingPortions + 1).toFixed(1)));
+                              }}
+                              className="p-2 rounded-xl border border-stone-200 bg-white hover:bg-stone-100 text-stone-700"
+                              aria-label="Increase in stock"
+                            >
+                              <Plus className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-xs font-semibold text-stone-600 mb-1">
+                            Unit / Portion Label
+                          </label>
+                          <input
+                            dir="auto"
+                            value={portionLabel}
+                            onChange={(e) => setPortionLabel(e.target.value)}
+                            placeholder={`e.g. ${profile.defaultPortionLabel}`}
+                            className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold text-stone-600 mb-1">
+                            Pack Description (Optional)
+                          </label>
+                          <input
+                            dir="auto"
+                            value={packDescription}
+                            onChange={(e) => setPackDescription(e.target.value)}
+                            placeholder="e.g. 1.5 kg Costco pack → 8 bags"
+                            className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm"
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <label className="text-xs font-semibold text-stone-600">
+                            How long does a full pack last?
+                          </label>
+                          <div className="flex items-center gap-1">
+                            {profile.quickDaysPresets.map((d) => (
+                              <button
+                                key={d}
+                                type="button"
+                                onClick={() => setAvgDaysPerFullPack(d)}
+                                className={`px-2 py-0.5 rounded-md text-[10px] font-bold border transition ${
+                                  avgDaysPerFullPack === d
+                                    ? 'bg-stone-900 text-white border-stone-900'
+                                    : 'bg-white text-stone-600 border-stone-200 hover:bg-stone-100'
+                                }`}
+                              >
+                                {d}d
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="relative">
+                          <input
+                            type="number"
+                            step="0.5"
+                            min="1"
+                            value={avgDaysPerFullPack}
+                            onChange={(e) => setAvgDaysPerFullPack(Number(e.target.value))}
+                            className="w-full rounded-xl border border-stone-200 bg-white px-3 pr-14 py-2 text-sm font-semibold"
+                          />
+                          <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-stone-400">
+                            days
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ========================================================== */}
+                  {/* ENTRY SECTION B: MEASURED LIQUID / BULK CONTAINER          */}
+                  {/* ========================================================== */}
+                  {entryMode === 'measured' && (
+                    <div className="rounded-2xl border border-teal-200/90 bg-teal-50/35 p-4 space-y-4">
+                      {/* Quick Container Presets */}
+                      {profile.measuredPresets.length > 0 && (
+                        <div>
+                          <div className="text-[11px] font-semibold text-teal-900/75 mb-1.5">
+                            Common {profile.shortEn} sizes:
+                          </div>
+                          <div className="flex flex-wrap gap-1.5">
+                            {profile.measuredPresets.map((preset) => {
+                              const isSelected =
+                                containerSize === preset.size && containerUnit === preset.unit;
+                              return (
+                                <button
+                                  key={preset.label}
+                                  type="button"
+                                  onClick={() => applyMeasuredPreset(preset)}
+                                  className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition ${
+                                    isSelected
+                                      ? 'bg-teal-700 text-white border-teal-700 shadow-2xs'
+                                      : 'bg-white text-stone-700 border-stone-200 hover:border-teal-400'
+                                  }`}
+                                >
+                                  {preset.label}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Container Size + Unit + Label */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-xs font-semibold text-stone-700 mb-1">
+                            Full Container Size *
+                          </label>
+                          <div className="flex items-center gap-1.5">
+                            <input
+                              type="number"
+                              step="any"
+                              min="0.05"
+                              value={containerSize}
+                              onChange={(e) => setContainerSize(Number(e.target.value))}
+                              className="flex-1 rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm font-bold"
+                            />
+                            <select
+                              value={containerUnit}
+                              onChange={(e) => setContainerUnit(e.target.value as MeasureUnit)}
+                              className="w-24 rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm font-semibold"
+                            >
+                              {unitOptions.map((u) => (
+                                <option key={u} value={u}>
+                                  {MEASURE_UNIT_META[u].label}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-semibold text-stone-600 mb-1">
+                            Container / Pack Label
+                          </label>
+                          <input
+                            dir="auto"
+                            value={packDescription}
+                            onChange={(e) => setPackDescription(e.target.value)}
+                            placeholder={`e.g. ${measuredTotalNow} jug / bag`}
+                            className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Interactive Visual Fill Level Control */}
+                      <div className="rounded-xl border border-stone-200/90 bg-white p-3.5 space-y-2.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-xs font-bold text-stone-800">
+                            How much is left right now?
+                          </span>
+                          <span className="inline-flex items-center gap-1.5 text-xs font-bold text-teal-900 bg-teal-50 border border-teal-200 px-2.5 py-0.5 rounded-full">
+                            <span>{levelPercent}%</span>
+                            <span className="text-teal-700 font-medium">
+                              ({levelPercent === 0 ? 'Empty' : `~${measuredRemainingNow}`})
+                            </span>
+                          </span>
+                        </div>
+
+                        {/* Visual Fill Bar */}
+                        <div className="relative h-2.5 w-full rounded-full bg-stone-100 overflow-hidden">
+                          <div
+                            className={`h-full rounded-full transition-all duration-150 ${levelToneColor}`}
+                            style={{ width: `${levelPercent}%` }}
+                          />
+                        </div>
+
+                        {/* Preset Level Pills */}
+                        <div className="grid grid-cols-5 gap-1.5">
+                          {CONTINUOUS_LEVEL_PRESETS.map((p) => {
+                            const active = activePresetPct === p.pct && levelPercent > 0;
+                            return (
+                              <button
+                                key={p.pct}
+                                type="button"
+                                onClick={() => {
+                                  setLevelEdited(true);
+                                  setLevelPercent(p.pct);
+                                }}
+                                className={`py-1.5 rounded-xl text-xs font-bold border transition ${
+                                  active
+                                    ? 'bg-stone-900 text-white border-stone-900 shadow-2xs'
+                                    : 'bg-stone-50 text-stone-700 border-stone-200 hover:bg-stone-100'
+                                }`}
+                              >
+                                {p.shortLabel}
+                              </button>
+                            );
+                          })}
+                        </div>
+
+                        {/* Smooth Range Slider for Exact Level */}
+                        <div className="flex items-center gap-2.5 pt-0.5">
+                          <span className="text-[10px] font-semibold text-stone-400">0%</span>
+                          <input
+                            type="range"
+                            min={0}
+                            max={100}
+                            step={5}
+                            value={levelPercent}
+                            onChange={(e) => {
+                              setLevelEdited(true);
+                              setLevelPercent(Number(e.target.value));
+                            }}
+                            aria-label="Current fill level percentage"
+                            className="flex-1 accent-teal-700 h-2 cursor-pointer"
+                          />
+                          <span className="text-[10px] font-semibold text-stone-400">100%</span>
+                        </div>
+                      </div>
+
+                      {/* Typical Lifespan */}
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <label className="text-xs font-semibold text-stone-700">
+                            How long does one full {measuredTotalNow} last?
+                          </label>
+                          <div className="flex items-center gap-1">
+                            {profile.quickDaysPresets.map((d) => (
+                              <button
+                                key={d}
+                                type="button"
+                                onClick={() => setAvgDaysPerFullPack(d)}
+                                className={`px-2 py-0.5 rounded-md text-[10px] font-bold border transition ${
+                                  avgDaysPerFullPack === d
+                                    ? 'bg-stone-900 text-white border-stone-900'
+                                    : 'bg-white text-stone-600 border-stone-200 hover:bg-stone-100'
+                                }`}
+                              >
+                                {d}d
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="relative">
+                          <input
+                            type="number"
+                            step="0.5"
+                            min="1"
+                            value={avgDaysPerFullPack}
+                            onChange={(e) => setAvgDaysPerFullPack(Number(e.target.value))}
+                            className="w-full rounded-xl border border-stone-200 bg-white px-3 pr-14 py-2 text-sm font-semibold"
+                          />
+                          <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-stone-400">
+                            days
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Optional Serving Pour Tracking */}
+                      <div className="rounded-xl border border-stone-200/80 bg-white/80 p-3 space-y-2.5">
+                        <label className="flex items-center gap-2 text-xs font-semibold text-stone-700 cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            checked={trackServings}
+                            onChange={(e) => setTrackServings(e.target.checked)}
+                            className="rounded border-stone-300 text-teal-600"
+                          />
+                          Enable quick &ldquo;-1 serving&rdquo; button (e.g. 1 cup milk, 1 scoop whey)
+                        </label>
+                        {trackServings && (
+                          <div className="grid grid-cols-2 gap-2.5 pt-1">
+                            <div>
+                              <label className="block text-[11px] font-semibold text-stone-500 mb-1">
+                                Serving Label
+                              </label>
+                              <input
+                                dir="auto"
+                                value={portionLabel}
+                                onChange={(e) => setPortionLabel(e.target.value)}
+                                placeholder="e.g. 1 cup (250ml)"
+                                className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-1.5 text-xs"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[11px] font-semibold text-stone-500 mb-1">
+                                Servings / Container
+                              </label>
+                              <input
+                                type="number"
+                                min="2"
+                                step="1"
+                                value={servingsPerContainer}
+                                onChange={(e) => setServingsPerContainer(Number(e.target.value))}
+                                className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-1.5 text-xs font-bold"
+                              />
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ========================================================== */}
+                  {/* ENTRY SECTION C: SIMPLE LEVEL (SPICES, SAUCES, HERBS)      */}
+                  {/* ========================================================== */}
+                  {entryMode === 'level_only' && (
+                    <div className="rounded-2xl border border-amber-200/80 bg-amber-50/35 p-4 space-y-4">
+                      {/* Visual Fill Level Gauge */}
+                      <div className="rounded-xl border border-stone-200/90 bg-white p-3.5 space-y-2.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-xs font-bold text-stone-800">Current Level</span>
+                          <span className="inline-flex items-center gap-1 text-xs font-bold text-stone-900 bg-stone-100 px-2.5 py-0.5 rounded-full">
+                            {getLevelWord(levelPercent)} ({levelPercent}%)
+                          </span>
+                        </div>
+
+                        <div className="relative h-2.5 w-full rounded-full bg-stone-100 overflow-hidden">
+                          <div
+                            className={`h-full rounded-full transition-all duration-150 ${levelToneColor}`}
+                            style={{ width: `${levelPercent}%` }}
+                          />
+                        </div>
+
+                        <div className="grid grid-cols-5 gap-1.5">
+                          {CONTINUOUS_LEVEL_PRESETS.map((p) => {
+                            const active = activePresetPct === p.pct && levelPercent > 0;
+                            return (
+                              <button
+                                key={p.pct}
+                                type="button"
+                                onClick={() => {
+                                  setLevelEdited(true);
+                                  setLevelPercent(p.pct);
+                                }}
+                                className={`py-1.5 rounded-xl text-xs font-bold border transition ${
+                                  active
+                                    ? 'bg-stone-900 text-white border-stone-900 shadow-2xs'
+                                    : 'bg-stone-50 text-stone-700 border-stone-200 hover:bg-stone-100'
+                                }`}
+                              >
+                                {p.shortLabel}
+                              </button>
+                            );
+                          })}
+                        </div>
+
+                        <div className="flex items-center gap-2.5 pt-0.5">
+                          <span className="text-[10px] font-semibold text-stone-400">0%</span>
+                          <input
+                            type="range"
+                            min={0}
+                            max={100}
+                            step={5}
+                            value={levelPercent}
+                            onChange={(e) => {
+                              setLevelEdited(true);
+                              setLevelPercent(Number(e.target.value));
+                            }}
+                            aria-label="Simple level percentage"
+                            className="flex-1 accent-teal-700 h-2 cursor-pointer"
+                          />
+                          <span className="text-[10px] font-semibold text-stone-400">100%</span>
+                        </div>
+                      </div>
+
+                      {/* Container Type Chips + Optional Label */}
+                      <div className="space-y-2">
+                        <label className="block text-xs font-semibold text-stone-700">
+                          Container / Pack Type (Optional)
+                        </label>
+                        <div className="flex flex-wrap gap-1.5">
+                          {profile.levelPackPresets.map((preset) => (
+                            <button
+                              key={preset}
+                              type="button"
+                              onClick={() => setPackDescription(preset)}
+                              className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition ${
+                                packDescription === preset
+                                  ? 'bg-teal-700 text-white border-teal-700'
+                                  : 'bg-white text-stone-700 border-stone-200 hover:border-teal-400'
+                              }`}
+                            >
+                              {preset}
+                            </button>
+                          ))}
+                        </div>
+                        <input
+                          dir="auto"
+                          value={packDescription}
+                          onChange={(e) => setPackDescription(e.target.value)}
+                          placeholder="e.g. 1 jar, 1 bottle, 1 bunch"
+                          className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm"
+                        />
+                      </div>
+
+                      {/* Typical Lifespan */}
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <label className="text-xs font-semibold text-stone-700">
+                            Roughly how long does one last?
+                          </label>
+                          <div className="flex items-center gap-1">
+                            {profile.quickDaysPresets.map((d) => (
+                              <button
+                                key={d}
+                                type="button"
+                                onClick={() => setAvgDaysPerFullPack(d)}
+                                className={`px-2 py-0.5 rounded-md text-[10px] font-bold border transition ${
+                                  avgDaysPerFullPack === d
+                                    ? 'bg-stone-900 text-white border-stone-900'
+                                    : 'bg-white text-stone-600 border-stone-200 hover:bg-stone-100'
+                                }`}
+                              >
+                                {d}d
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="relative">
+                          <input
+                            type="number"
+                            step="1"
+                            min="1"
+                            value={avgDaysPerFullPack}
+                            onChange={(e) => setAvgDaysPerFullPack(Number(e.target.value))}
+                            className="w-full rounded-xl border border-stone-200 bg-white px-3 pr-14 py-2 text-sm font-semibold"
+                          />
+                          <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-stone-400">
+                            days
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setTrackingMode('portioned')}
-                    className={`rounded-xl border p-2.5 text-left text-xs transition ${
-                      trackingMode === 'portioned'
-                        ? 'border-teal-600 bg-teal-50 text-teal-900 font-medium'
-                        : 'border-stone-200 text-stone-600'
-                    }`}
-                  >
-                    <div className="font-semibold">Portioned Packs / Count</div>
-                    <div className="text-[11px] opacity-80">Freezer bags, eggs, fillets</div>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setTrackingMode('continuous')}
-                    className={`rounded-xl border p-2.5 text-left text-xs transition ${
-                      trackingMode === 'continuous'
-                        ? 'border-teal-600 bg-teal-50 text-teal-900 font-medium'
-                        : 'border-stone-200 text-stone-600'
-                    }`}
-                  >
-                    <div className="font-semibold">Continuous / Level Bar</div>
-                    <div className="text-[11px] opacity-80">Milk, spinach, rice, oil</div>
-                  </button>
-                </div>
-
-                <div className="grid grid-cols-3 gap-3">
-                  <div>
-                    <label className="block text-xs font-medium text-stone-600 mb-1">Full Pack Portions</label>
-                    <input
-                      type="number"
-                      step="0.5"
-                      min="1"
-                      value={totalPortions}
-                      onChange={(e) => setTotalPortions(Number(e.target.value))}
-                      className="w-full rounded-xl border border-stone-200 px-3 py-2 text-sm"
-                    />
+                {/* 4. Category-Aware Freshness & Notes */}
+                {perishable ? (
+                  <div className="rounded-2xl border border-rose-200/70 bg-rose-50/35 p-3.5 space-y-2.5">
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <label className="inline-flex items-center gap-1.5 text-xs font-bold text-rose-950">
+                        <Calendar className="w-3.5 h-3.5 text-rose-600" />
+                        Freshness / Best-By Date
+                      </label>
+                      <div className="flex items-center gap-1">
+                        {profile.expiryQuickDays.map((d) => {
+                          const targetDate = addDaysToIsoDate(d);
+                          const active = expiresAt === targetDate;
+                          return (
+                            <button
+                              key={d}
+                              type="button"
+                              onClick={() => setExpiresAt(targetDate)}
+                              className={`px-2 py-0.5 rounded-md text-[10px] font-bold border transition ${
+                                active
+                                  ? 'bg-rose-700 text-white border-rose-700'
+                                  : 'bg-white text-rose-900 border-rose-200 hover:bg-rose-50'
+                              }`}
+                            >
+                              +{d}d
+                            </button>
+                          );
+                        })}
+                        {expiresAt && (
+                          <button
+                            type="button"
+                            onClick={() => setExpiresAt('')}
+                            className="px-1.5 py-0.5 rounded-md text-[10px] font-semibold text-stone-500 hover:text-stone-800"
+                          >
+                            Clear
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      <input
+                        type="date"
+                        value={expiresAt}
+                        onChange={(e) => setExpiresAt(e.target.value)}
+                        className="w-full rounded-xl border border-rose-200/80 bg-white px-3 py-2 text-sm"
+                      />
+                      <input
+                        dir="auto"
+                        value={notes}
+                        onChange={(e) => setNotes(e.target.value)}
+                        placeholder="Quick note (optional)"
+                        className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm"
+                      />
+                    </div>
                   </div>
-                  <div>
-                    <label className="block text-xs font-medium text-stone-600 mb-1">Remaining Now</label>
-                    <input
-                      type="number"
-                      step="0.5"
-                      min="0"
-                      value={remainingPortions}
-                      onChange={(e) => setRemainingPortions(Number(e.target.value))}
-                      className="w-full rounded-xl border border-stone-200 px-3 py-2 text-sm"
-                    />
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-medium text-stone-600 mb-1">
+                        Best-By Date (Optional)
+                      </label>
+                      <input
+                        type="date"
+                        value={expiresAt}
+                        onChange={(e) => setExpiresAt(e.target.value)}
+                        className="w-full rounded-xl border border-stone-200 px-3 py-2 text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-stone-600 mb-1">
+                        Quick Note
+                      </label>
+                      <input
+                        dir="auto"
+                        value={notes}
+                        onChange={(e) => setNotes(e.target.value)}
+                        placeholder="Optional note"
+                        className="w-full rounded-xl border border-stone-200 px-3 py-2 text-sm"
+                      />
+                    </div>
                   </div>
-                  <div>
-                    <label className="block text-xs font-medium text-stone-600 mb-1">Avg Days / Pack</label>
-                    <input
-                      type="number"
-                      step="0.5"
-                      min="1"
-                      value={avgDaysPerFullPack}
-                      onChange={(e) => setAvgDaysPerFullPack(Number(e.target.value))}
-                      className="w-full rounded-xl border border-stone-200 px-3 py-2 text-sm"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs font-medium text-stone-600 mb-1">Portion Size Label</label>
-                    <input
-                      dir="auto"
-                      value={portionLabel}
-                      onChange={(e) => setPortionLabel(e.target.value)}
-                      placeholder="e.g. 180g serving, 1 cup"
-                      className="w-full rounded-xl border border-stone-200 px-3 py-2 text-sm"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-stone-600 mb-1">Pack Description</label>
-                    <input
-                      dir="auto"
-                      value={packDescription}
-                      onChange={(e) => setPackDescription(e.target.value)}
-                      placeholder="e.g. 1.5 kg Costco pack"
-                      className="w-full rounded-xl border border-stone-200 px-3 py-2 text-sm"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs font-medium text-stone-600 mb-1">Best-By Date (Optional)</label>
-                    <input
-                      type="date"
-                      value={expiresAt}
-                      onChange={(e) => setExpiresAt(e.target.value)}
-                      className="w-full rounded-xl border border-stone-200 px-3 py-2 text-sm"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-stone-600 mb-1">Quick Note</label>
-                    <input
-                      dir="auto"
-                      value={notes}
-                      onChange={(e) => setNotes(e.target.value)}
-                      placeholder="Optional note"
-                      className="w-full rounded-xl border border-stone-200 px-3 py-2 text-sm"
-                    />
-                  </div>
-                </div>
+                )}
 
                 <label className="flex items-center gap-2.5 text-xs text-stone-700 cursor-pointer select-none">
                   <input
@@ -680,7 +1593,12 @@ export const ItemModal: React.FC<ItemModalProps> = ({
                     onChange={(e) => setAutoAddOnEmpty(e.target.checked)}
                     className="rounded border-stone-300 text-teal-600"
                   />
-                  Automatically add to Shopping List when finished
+                  <span>
+                    Automatically add to Shopping List when finished
+                    {category === 'prepared' && (
+                      <span className="text-stone-400"> (off by default for leftovers)</span>
+                    )}
+                  </span>
                 </label>
               </>
             ) : (
@@ -789,7 +1707,9 @@ export const ItemModal: React.FC<ItemModalProps> = ({
                   </div>
                   <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
                     <div>
-                      <label className="block text-[10px] font-bold text-stone-500 mb-1">Calories</label>
+                      <label className="block text-[10px] font-bold text-stone-500 mb-1">
+                        Calories
+                      </label>
                       <input
                         type="number"
                         min="0"
@@ -799,7 +1719,9 @@ export const ItemModal: React.FC<ItemModalProps> = ({
                       />
                     </div>
                     <div>
-                      <label className="block text-[10px] font-bold text-indigo-700 mb-1">Protein (g)</label>
+                      <label className="block text-[10px] font-bold text-indigo-700 mb-1">
+                        Protein (g)
+                      </label>
                       <input
                         type="number"
                         min="0"
@@ -810,7 +1732,9 @@ export const ItemModal: React.FC<ItemModalProps> = ({
                       />
                     </div>
                     <div>
-                      <label className="block text-[10px] font-bold text-rose-700 mb-1">Sugar (g)</label>
+                      <label className="block text-[10px] font-bold text-rose-700 mb-1">
+                        Sugar (g)
+                      </label>
                       <input
                         type="number"
                         min="0"
@@ -821,7 +1745,9 @@ export const ItemModal: React.FC<ItemModalProps> = ({
                       />
                     </div>
                     <div>
-                      <label className="block text-[10px] font-bold text-emerald-700 mb-1">Fiber (g)</label>
+                      <label className="block text-[10px] font-bold text-emerald-700 mb-1">
+                        Fiber (g)
+                      </label>
                       <input
                         type="number"
                         min="0"
@@ -832,7 +1758,9 @@ export const ItemModal: React.FC<ItemModalProps> = ({
                       />
                     </div>
                     <div>
-                      <label className="block text-[10px] font-bold text-stone-500 mb-1">Carbs (g)</label>
+                      <label className="block text-[10px] font-bold text-stone-500 mb-1">
+                        Carbs (g)
+                      </label>
                       <input
                         type="number"
                         min="0"
@@ -843,7 +1771,9 @@ export const ItemModal: React.FC<ItemModalProps> = ({
                       />
                     </div>
                     <div>
-                      <label className="block text-[10px] font-bold text-stone-500 mb-1">Fat (g)</label>
+                      <label className="block text-[10px] font-bold text-stone-500 mb-1">
+                        Fat (g)
+                      </label>
                       <input
                         type="number"
                         min="0"
@@ -930,7 +1860,7 @@ export const ItemModal: React.FC<ItemModalProps> = ({
                   className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold text-indigo-700 hover:bg-indigo-50"
                 >
                   <Barcode className="w-4 h-4" />
-                  Back to Barcode
+                  Change Type / Scan
                 </button>
               ) : (
                 <span />

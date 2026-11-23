@@ -12,6 +12,7 @@ import {
   X,
 } from 'lucide-react';
 import {
+  FoodCategory,
   InventoryItem,
   ReceiptParsedItem,
   StorageZone,
@@ -19,7 +20,8 @@ import {
   UILanguage,
 } from '../types/kitchen';
 import { scanReceiptWithGemini } from '../services/geminiEdge';
-import { ZONE_META } from '../i18n/translations';
+import { CATEGORY_META, ZONE_META } from '../i18n/translations';
+import { PRODUCT_CATEGORY_ORDER } from '../utils/productCategories';
 
 interface ReceiptScanModalProps {
   items: InventoryItem[];
@@ -279,10 +281,10 @@ export const ReceiptScanModal: React.FC<ReceiptScanModalProps> = ({
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-3 gap-2 pl-7">
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pl-7">
                       <div>
                         <label className="block text-[10px] font-semibold text-stone-400 mb-0.5">
-                          + Portions
+                          + Qty / Pack
                         </label>
                         <input
                           type="number"
@@ -298,14 +300,33 @@ export const ReceiptScanModal: React.FC<ReceiptScanModalProps> = ({
                       </div>
                       <div>
                         <label className="block text-[10px] font-semibold text-stone-400 mb-0.5">
-                          Portion Size
+                          Pack / Size
                         </label>
                         <input
                           dir="auto"
-                          value={line.portionLabel}
-                          onChange={(e) => updateLine(line.id, { portionLabel: e.target.value })}
+                          value={line.packDescription}
+                          onChange={(e) => updateLine(line.id, { packDescription: e.target.value })}
+                          placeholder="e.g. 4L jug, 1 kg"
                           className="w-full rounded-lg border border-stone-200 px-2 py-1 text-xs"
                         />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-semibold text-stone-400 mb-0.5">
+                          Category
+                        </label>
+                        <select
+                          value={line.category}
+                          onChange={(e) =>
+                            updateLine(line.id, { category: e.target.value as FoodCategory })
+                          }
+                          className="w-full rounded-lg border border-stone-200 bg-white px-2 py-1 text-xs"
+                        >
+                          {PRODUCT_CATEGORY_ORDER.map((c) => (
+                            <option key={c} value={c}>
+                              {CATEGORY_META[c][lang]}
+                            </option>
+                          ))}
+                        </select>
                       </div>
                       <div>
                         <label className="block text-[10px] font-semibold text-stone-400 mb-0.5">
