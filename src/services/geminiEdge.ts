@@ -73,7 +73,26 @@ async function invokeGeminiEdge<T>(payload: Record<string, unknown>): Promise<T>
     body: payload,
   });
   if (error) {
-    throw new Error(error.message || 'Edge function call failed');
+    let detailedMsg = error.message || 'Edge function call failed';
+    try {
+      const ctx = (error as { context?: Response }).context;
+      if (ctx && typeof ctx.text === 'function') {
+        const rawBody = await ctx.text();
+        if (rawBody) {
+          try {
+            const parsed = JSON.parse(rawBody) as { error?: string; message?: string };
+            if (parsed.error || parsed.message) {
+              detailedMsg = String(parsed.error || parsed.message);
+            }
+          } catch {
+            detailedMsg = rawBody.slice(0, 200);
+          }
+        }
+      }
+    } catch {
+      // keep fallback message
+    }
+    throw new Error(detailedMsg);
   }
   if (data?.error) {
     throw new Error(String(data.error));
@@ -311,7 +330,7 @@ export async function parseVoiceFoodWithGemini(params: {
     audioMimeType = encoded.mimeType;
   }
 
-  const raw = await invokeGeminiEdge<{
+  type RawVoiceResponse = {
     transcript?: string;
     name?: string;
     alias?: string;
@@ -323,6 +342,7 @@ export async function parseVoiceFoodWithGemini(params: {
     ingredients?: {
       spokenText?: string;
       matchedItemId?: string | null;
+      itemId?: string | null;
       name?: string;
       alias?: string;
       portionsNeeded?: number;
@@ -332,23 +352,85 @@ export async function parseVoiceFoodWithGemini(params: {
       trackingMode?: string;
       packDescription?: string;
     }[];
-  }>({
-    action: 'parse_voice_food',
-    audioBase64,
-    audioMimeType,
-    transcript: cleanTranscript || undefined,
-    languageHint,
-    cuisines,
-    existingItems: inventory.map((i) => ({
-      id: i.id,
-      name: i.name,
-      alias: i.alias,
-      zone: i.zone,
-      category: i.category,
-      portionLabel: i.portionLabel,
-      trackingMode: i.trackingMode,
-    })),
-  });
+  };
+
+  let raw: RawVoiceResponse;
+  let usedSource: VoiceParsedFood['source'] = audioBase64 ? 'gemini_audio' : 'gemini_text';
+
+  const existingItemsPayload = inventory.map((i) => ({
+    id: i.id,
+    name: i.name,
+    alias: i.alias,
+    zone: i.zone,
+    category: i.category,
+    portionLabel: i.portionLabel,
+    trackingMode: i.trackingMode,
+  }));
+
+  try {
+    raw = await invokeGeminiEdge<RawVoiceResponse>({
+      action: 'parse_voice_food',
+      audioBase64,
+      audioMimeType,
+      transcript: cleanTranscript || undefined,
+      languageHint,
+      cuisines,
+      existingItems: existingItemsPayload,
+    });
+  } catch (primaryErr) {
+    const errMsg = primaryErr instanceof Error ? primaryErr.message : String(primaryErr);
+    const isUnknownAction = /unknown action/i.test(errMsg);
+
+    // Retry 1: If audio upload failed (e.g. Safari codec mismatch) and we have a transcript, retry text-only
+    if (!isUnknownAction && audioBase64 && cleanTranscript) {
+      raw = await invokeGeminiEdge<RawVoiceResponse>({
+        action: 'parse_voice_food',
+        transcript: cleanTranscript,
+        languageHint,
+        cuisines,
+        existingItems: existingItemsPayload,
+      });
+      usedSource = 'gemini_text';
+    } else if (isUnknownAction && cleanTranscript) {
+      // Retry 2: Deployed Edge Function hasn't been redeployed with `parse_voice_food` yet —
+      // route through the already-deployed `meal_plan` action so live Gemini still parses the exact spoken food!
+      const compatRes = await invokeGeminiEdge<{
+        recipes?: RawVoiceResponse[];
+      }>({
+        action: 'meal_plan',
+        preferences: {
+          scope: 'single_meal',
+          task: 'EXTRACT_EXACT_SPOKEN_FOOD_FROM_TRANSCRIPT',
+          instruction:
+            'CRITICAL: Do NOT invent an unrelated meal. Return EXACTLY 1 recipe matching the user spoken description below verbatim in intent. Extract the exact dish name (clean English name + natural Persian alias), cooking tools, prepMinutes, and EVERY spoken ingredient with its amount (portionsNeeded + portionLabel). Match itemId to the exact id in stockedInventory whenever the ingredient exists in stockedInventory — match across English and Persian (e.g. روغن -> Olive Oil, گوشت تیکه‌ای -> Beef, سبزی -> Persian Herbs, شیر -> Milk, تخم‌مرغ -> Eggs). For missing ingredients, omit itemId and provide clean English name and Persian alias.',
+          spokenFoodDescription: cleanTranscript,
+          languageHint,
+          cuisine: 'all',
+        },
+        stockedInventory: inventory.map((i) => ({
+          id: i.id,
+          name: i.name,
+          alias: i.alias,
+          zone: i.zone,
+          remainingPortions: i.remainingPortions,
+          portionLabel: i.portionLabel,
+          proteinPerPortion: i.proteinPerPortion,
+        })),
+      });
+
+      const firstRecipe = compatRes.recipes?.[0];
+      if (!firstRecipe) {
+        throw primaryErr;
+      }
+      raw = {
+        ...firstRecipe,
+        transcript: cleanTranscript,
+      };
+      usedSource = 'gemini_compat';
+    } else {
+      throw primaryErr;
+    }
+  }
 
   const itemById = new Map(inventory.map((i) => [i.id, i]));
   const parsedIngredients: VoiceParsedIngredient[] = (raw.ingredients || [])
@@ -356,10 +438,9 @@ export async function parseVoiceFoodWithGemini(params: {
     .map((ing, idx) => {
       const candidateName = (ing.name || ing.spokenText || '').trim();
       const candidateAlias = (ing.alias || '').trim();
+      const candidateId = ing.matchedItemId || ing.itemId || undefined;
       const directMatch =
-        ing.matchedItemId && itemById.has(ing.matchedItemId)
-          ? itemById.get(ing.matchedItemId)
-          : undefined;
+        candidateId && itemById.has(candidateId) ? itemById.get(candidateId) : undefined;
       const fallbackMatch = directMatch
         ? null
         : matchVoiceIngredientToKitchen(candidateName, candidateAlias, inventory);
@@ -451,6 +532,6 @@ export async function parseVoiceFoodWithGemini(params: {
         ? raw.quickSteps.filter(Boolean)
         : ['Prepare ingredients and cook until done.'],
     ingredients: parsedIngredients,
-    source: audioBase64 ? 'gemini_audio' : 'gemini_text',
+    source: usedSource,
   };
 }

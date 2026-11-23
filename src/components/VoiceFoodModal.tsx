@@ -109,7 +109,15 @@ export const VoiceFoodModal: React.FC<VoiceFoodModalProps> = ({
   const defaultStoreId = stores[0]?.id ?? 'store-superstore';
 
   const [step, setStep] = useState<'record' | 'review'>('record');
-  const [voiceLang, setVoiceLang] = useState<'auto' | 'en' | 'fa'>('auto');
+  const [voiceLang, setVoiceLang] = useState<'auto' | 'en' | 'fa'>(() => {
+    try {
+      const saved = localStorage.getItem('kitchenflow_voice_lang_v1');
+      if (saved === 'auto' || saved === 'en' || saved === 'fa') return saved;
+    } catch {
+      // ignore
+    }
+    return 'auto';
+  });
   const [isRecording, setIsRecording] = useState(false);
   const [recordSeconds, setRecordSeconds] = useState(0);
   const [transcript, setTranscript] = useState('');
@@ -138,6 +146,15 @@ export const VoiceFoodModal: React.FC<VoiceFoodModalProps> = ({
   transcriptRef.current = transcript;
 
   const itemMap = useMemo(() => new Map(items.map((i) => [i.id, i])), [items]);
+
+  const handleSetVoiceLang = (next: 'auto' | 'en' | 'fa') => {
+    setVoiceLang(next);
+    try {
+      localStorage.setItem('kitchenflow_voice_lang_v1', next);
+    } catch {
+      // ignore
+    }
+  };
 
   const stopAllCapture = () => {
     if (timerRef.current !== null) {
@@ -188,6 +205,8 @@ export const VoiceFoodModal: React.FC<VoiceFoodModalProps> = ({
       );
     } else if (parsed.source === 'gemini_audio') {
       setInfoNotice('Transcribed & extracted directly from your voice audio (EN/FA).');
+    } else if (parsed.source === 'gemini_compat') {
+      setInfoNotice('Extracted with Gemini AI — review matched kitchen tickers and confirm any missing items.');
     } else {
       setInfoNotice('Extracted with Gemini AI — review matches and confirm missing kitchen items.');
     }
@@ -275,12 +294,12 @@ export const VoiceFoodModal: React.FC<VoiceFoodModalProps> = ({
             mediaStreamRef.current.getTracks().forEach((tr) => tr.stop());
             mediaStreamRef.current = null;
           }
-          // Auto-analyze immediately once recording stops!
+          // Wait briefly so SpeechRecognition flushes its final spoken words into transcriptRef
           window.setTimeout(() => {
             if (blob || transcriptRef.current.trim()) {
               runExtraction(blob, transcriptRef.current);
             }
-          }, 120);
+          }, 280);
         };
 
         mediaRecorderRef.current = recorder;
@@ -633,7 +652,7 @@ export const VoiceFoodModal: React.FC<VoiceFoodModalProps> = ({
                     key={opt.id}
                     type="button"
                     disabled={isRecording}
-                    onClick={() => setVoiceLang(opt.id)}
+                    onClick={() => handleSetVoiceLang(opt.id)}
                     className={`px-3 py-1 rounded-lg text-xs font-bold transition ${
                       voiceLang === opt.id
                         ? 'bg-white text-stone-900 shadow-2xs'
