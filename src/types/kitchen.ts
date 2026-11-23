@@ -4,11 +4,28 @@ export type FoodCategory =
   | 'protein'
   | 'dairy'
   | 'produce'
+  | 'beverages'
   | 'grains'
+  | 'condiments'
+  | 'spices'
   | 'pantry_staple'
-  | 'snacks';
+  | 'snacks'
+  | 'prepared';
 
 export type TrackingMode = 'portioned' | 'continuous';
+
+export type ContinuousTrackingStyle = 'measured' | 'level_only';
+
+export type MeasureUnit =
+  | 'L'
+  | 'ml'
+  | 'gal'
+  | 'fl_oz'
+  | 'kg'
+  | 'g'
+  | 'lb'
+  | 'oz'
+  | 'cups';
 
 export type CookingTool =
   | 'air_fryer'
@@ -67,6 +84,12 @@ export interface InventoryItem {
   category: FoodCategory;
   zone: StorageZone;
   trackingMode: TrackingMode;
+  /** For continuous items: 'measured' tracks a container size/unit (e.g. 4 L milk); 'level_only' tracks simple fill level (e.g. jar of spice). */
+  continuousStyle?: ContinuousTrackingStyle;
+  /** Total capacity of one full container (e.g. 4 for 4L milk, 750 for 750g yogurt). */
+  containerSize?: number;
+  /** Measurement unit for containerSize (e.g. 'L', 'ml', 'g', 'kg'). */
+  containerUnit?: MeasureUnit;
   totalPortions: number;
   remainingPortions: number;
   portionLabel: string;
@@ -170,6 +193,7 @@ export interface ReceiptParsedItem {
   packDescription: string;
   zone: StorageZone;
   category: FoodCategory;
+  trackingMode?: TrackingMode;
   price?: number;
   included: boolean;
   confidence: 'high' | 'medium' | 'new';

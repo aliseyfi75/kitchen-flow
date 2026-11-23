@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   Archive,
@@ -18,12 +18,14 @@ import {
   Snowflake,
   Thermometer,
   Trash2,
+  TrendingDown,
   User,
   Users,
 } from 'lucide-react';
 import {
   EatingMode,
   InventoryItem,
+  ItemForecast,
   ShoppingItem,
   StorageZone,
   Store,
@@ -32,6 +34,20 @@ import {
 } from '../types/kitchen';
 import { computeItemForecast } from '../utils/forecasting';
 import { CATEGORY_META, t, ZONE_META } from '../i18n/translations';
+import {
+  CONTINUOUS_LEVEL_PRESETS,
+  formatMeasuredAmount,
+  formatRestockLabel,
+  getActiveLevelPreset,
+  getClampedStockPercent,
+  getLevelWord,
+  getMeasuredRemainingDisplay,
+  getNextLowerLevelPercent,
+  getRawStockPercent,
+  hasServingPourAction,
+} from '../utils/inventoryDisplay';
+import { PRODUCT_CATEGORIES } from '../utils/productCategories';
+import { CategoryIcon } from './CategoryIcon';
 import { ItemModal } from './ItemModal';
 
 interface KitchenViewProps {
@@ -58,6 +74,173 @@ const ZONE_ICONS: Record<StorageZone, React.ReactNode> = {
   fridge: <Thermometer className="w-4 h-4" />,
   freezer: <Snowflake className="w-4 h-4" />,
   pantry: <Archive className="w-4 h-4" />,
+};
+
+interface ContinuousStockPanelProps {
+  item: InventoryItem;
+  forecast: ItemForecast;
+  onSetLevel: (itemId: string, percent: number) => void;
+}
+
+/**
+ * Interactive fill-level visualization & control for continuous products (milk, yogurt, oil, rice, herbs, spices).
+ * Uses local drag preview so dragging the slider feels instant without spamming toasts on every tick.
+ */
+const ContinuousStockPanel: React.FC<ContinuousStockPanelProps> = ({
+  item,
+  forecast,
+  onSetLevel,
+}) => {
+  const rawPercent = getRawStockPercent(item);
+  const clampedPercent = getClampedStockPercent(item);
+  const [dragPct, setDragPct] = useState<number | null>(null);
+
+  useEffect(() => {
+    setDragPct(null);
+  }, [item.remainingPortions, item.totalPortions]);
+
+  const displayPct = dragPct !== null ? dragPct : clampedPercent;
+  const isOverstocked = dragPct === null && rawPercent > 100;
+  const activePreset = getActiveLevelPreset(displayPct);
+  const measured = getMeasuredRemainingDisplay(item);
+
+  const previewMeasuredText =
+    item.containerSize && item.containerUnit
+      ? formatMeasuredAmount((item.containerSize * displayPct) / 100, item.containerUnit)
+      : null;
+
+  const barColor =
+    displayPct <= 15
+      ? 'bg-rose-500'
+      : displayPct <= 38 || forecast.stockState === 'low'
+      ? 'bg-amber-500'
+      : 'bg-teal-600';
+
+  const commitDrag = () => {
+    if (dragPct === null) return;
+    const next = dragPct;
+    setDragPct(null);
+    if (next !== clampedPercent) {
+      onSetLevel(item.id, next);
+    }
+  };
+
+  return (
+    <div className="space-y-2">
+      {/* Level Headline */}
+      <div className="flex items-center justify-between gap-2 text-xs">
+        <div className="flex items-center gap-1.5 flex-wrap min-w-0">
+          {measured ? (
+            <>
+              <span className="font-bold text-stone-900">
+                {isOverstocked
+                  ? `Full + extra (~${measured.remainingText})`
+                  : displayPct === 0
+                  ? `0 / ${measured.totalText}`
+                  : `~${previewMeasuredText} / ${measured.totalText}`}
+              </span>
+              <span
+                className={`px-1.5 py-0.5 rounded-md text-[10px] font-bold ${
+                  displayPct === 0
+                    ? 'bg-rose-100 text-rose-700'
+                    : displayPct <= 25
+                    ? 'bg-amber-100 text-amber-800'
+                    : 'bg-teal-50 text-teal-800'
+                }`}
+              >
+                {isOverstocked ? `${rawPercent}%` : `${displayPct}%`}
+              </span>
+            </>
+          ) : (
+            <>
+              <span className="font-bold text-stone-900">
+                {getLevelWord(isOverstocked ? rawPercent : displayPct)}
+              </span>
+              <span
+                className={`px-1.5 py-0.5 rounded-md text-[10px] font-bold ${
+                  displayPct === 0
+                    ? 'bg-rose-100 text-rose-700'
+                    : displayPct <= 25
+                    ? 'bg-amber-100 text-amber-800'
+                    : 'bg-stone-100 text-stone-700'
+                }`}
+              >
+                {isOverstocked ? `${rawPercent}%` : `${displayPct}%`}
+              </span>
+              {item.packDescription && (
+                <span className="text-stone-500 truncate">• {item.packDescription}</span>
+              )}
+            </>
+          )}
+        </div>
+
+        <span className="font-semibold text-stone-500 shrink-0">
+          {item.remainingPortions > 0 ? `~${forecast.estimatedDaysLeft}d` : 'Empty'}
+        </span>
+      </div>
+
+      {/* Visual Gauge with Quarter Tick Marks */}
+      <div className="relative h-2.5 w-full rounded-full bg-stone-100 overflow-hidden">
+        <div
+          className={`h-full rounded-full transition-all duration-200 ${barColor}`}
+          style={{ width: `${displayPct}%` }}
+        />
+        <div className="pointer-events-none absolute inset-0 flex justify-between px-[25%]">
+          <span className="w-px h-full bg-white/60" />
+          <span className="w-px h-full bg-white/60" />
+          <span className="w-px h-full bg-white/60" />
+        </div>
+      </div>
+
+      {/* Quick Level Presets + Smooth Drag Slider (shown while item is in stock) */}
+      {item.remainingPortions > 0 && (
+        <div className="space-y-1.5 pt-0.5">
+          <div className="grid grid-cols-5 gap-1">
+            {CONTINUOUS_LEVEL_PRESETS.map((preset) => {
+              const isActive = !isOverstocked && activePreset === preset.pct;
+              return (
+                <button
+                  key={preset.pct}
+                  type="button"
+                  onClick={() => onSetLevel(item.id, preset.pct)}
+                  className={`py-1.5 rounded-lg text-[11px] font-bold transition border ${
+                    isActive
+                      ? 'bg-stone-900 text-white border-stone-900 shadow-2xs'
+                      : 'bg-stone-50 text-stone-600 border-stone-200 hover:bg-stone-100 hover:text-stone-900'
+                  }`}
+                  title={`Set ${item.name} to ${preset.pct}% (${preset.word})`}
+                >
+                  {preset.shortLabel}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Fine Adjustment Slider */}
+          <div className="flex items-center gap-2 px-0.5">
+            <span className="text-[10px] font-medium text-stone-400">Adjust</span>
+            <input
+              type="range"
+              min={0}
+              max={100}
+              step={5}
+              value={displayPct}
+              onChange={(e) => setDragPct(Number(e.target.value))}
+              onPointerUp={commitDrag}
+              onTouchEnd={commitDrag}
+              onKeyUp={commitDrag}
+              onBlur={commitDrag}
+              aria-label={`Adjust level for ${item.name}`}
+              className="flex-1 accent-teal-700 h-1.5 cursor-pointer"
+            />
+            <span className="text-[10px] font-bold text-stone-500 w-7 text-right">
+              {displayPct}%
+            </span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 };
 
 export const KitchenView: React.FC<KitchenViewProps> = ({
@@ -110,10 +293,13 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
         if (zoneFilter !== 'all' && item.zone !== zoneFilter) return false;
         if (q) {
           const store = storeMap.get(forecast.learnedStoreId);
+          const catMeta = CATEGORY_META[item.category];
           const hay = [
             item.name,
             item.alias,
             item.packDescription,
+            catMeta?.en ?? '',
+            catMeta?.fa ?? '',
             store?.name ?? '',
             store?.alias ?? '',
           ]
@@ -287,8 +473,8 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
           </div>
           <p className="text-xs text-stone-500">
             {items.length === 0
-              ? 'Tap "+ Add Item" to scan a barcode or enter an item, or tap "Scan Receipt" after a shopping trip.'
-              : 'Try clearing your search or switching storage zones.'}
+              ? 'Tap "+ Add Item" to scan a barcode or pick a product type, or tap "Scan Receipt" after a shopping trip.'
+              : 'Try clearing your search or switching storage zones / categories.'}
           </p>
         </div>
       ) : (
@@ -297,6 +483,9 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
             const store = storeMap.get(forecast.learnedStoreId);
             const nut = item.nutrition;
             const onShoppingList = shoppingItemIds.has(item.id);
+            const isContinuous = item.trackingMode === 'continuous';
+            const canPourServing = isContinuous && hasServingPourAction(item);
+            const catMeta = PRODUCT_CATEGORIES[item.category];
 
             const barColor =
               forecast.stockState === 'critical'
@@ -331,6 +520,18 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
               microChips.push(`Vit C ${nut!.micronutrients.vitaminCPct}%`);
 
             const effectiveUseAmount = Math.min(servingMultiplier, item.remainingPortions);
+            const continuousPourAmount =
+              item.remainingPortions >= 1
+                ? Math.min(servingMultiplier, Math.floor(item.remainingPortions))
+                : item.remainingPortions;
+            const nextLowerPct = isContinuous
+              ? getNextLowerLevelPercent(getClampedStockPercent(item))
+              : 0;
+            const nextLowerLabel =
+              nextLowerPct === 0
+                ? 'Empty'
+                : CONTINUOUS_LEVEL_PRESETS.find((p) => p.pct === nextLowerPct)?.shortLabel ??
+                  `${nextLowerPct}%`;
 
             return (
               <div
@@ -365,6 +566,11 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
                         {ZONE_ICONS[item.zone]}
                         {ZONE_META[item.zone][lang]}
                       </span>
+                      <span>•</span>
+                      <span className="inline-flex items-center gap-1 text-stone-600">
+                        <CategoryIcon category={item.category} className="w-3.5 h-3.5 text-stone-400" />
+                        {catMeta?.shortEn ?? CATEGORY_META[item.category]?.[lang]}
+                      </span>
                       {store && (
                         <>
                           <span>•</span>
@@ -375,12 +581,6 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
                             />
                             {store.name}
                           </span>
-                        </>
-                      )}
-                      {isDetailed && (
-                        <>
-                          <span>•</span>
-                          <span>{CATEGORY_META[item.category][lang]}</span>
                         </>
                       )}
                     </div>
@@ -437,49 +637,37 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
                   </div>
                 </div>
 
-                {/* Portion progress + status */}
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="font-semibold text-stone-800">
-                      {item.remainingPortions} / {item.totalPortions}{' '}
-                      <span className="font-normal text-stone-500">× {item.portionLabel}</span>
-                    </span>
-                    <span className="font-medium text-stone-500">
-                      {item.remainingPortions > 0 ? `~${forecast.estimatedDaysLeft}d` : '0%'}
-                    </span>
-                  </div>
-
-                  <div className="h-2 w-full rounded-full bg-stone-100 overflow-hidden">
-                    <div
-                      className={`h-full rounded-full transition-all duration-300 ${barColor}`}
-                      style={{ width: `${forecast.stockPercent}%` }}
+                {/* Stock Display: Tailored for Continuous vs. Portioned */}
+                <div className="space-y-2.5">
+                  {isContinuous ? (
+                    <ContinuousStockPanel
+                      item={item}
+                      forecast={forecast}
+                      onSetLevel={onSetLevel}
                     />
-                  </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="font-semibold text-stone-800">
+                          {item.remainingPortions} / {item.totalPortions}{' '}
+                          <span className="font-normal text-stone-500">× {item.portionLabel}</span>
+                        </span>
+                        <span className="font-medium text-stone-500">
+                          {item.remainingPortions > 0 ? `~${forecast.estimatedDaysLeft}d` : '0%'}
+                        </span>
+                      </div>
 
-                  {item.trackingMode === 'continuous' && (
-                    <div className="flex items-center gap-1 pt-0.5">
-                      {[100, 75, 50, 25, 0].map((pct) => {
-                        const isNear = Math.abs(forecast.stockPercent - pct) <= 10;
-                        return (
-                          <button
-                            key={pct}
-                            type="button"
-                            onClick={() => onSetLevel(item.id, pct)}
-                            className={`flex-1 py-1 rounded-lg text-[11px] font-medium transition border ${
-                              isNear
-                                ? 'bg-stone-800 text-white border-stone-800'
-                                : 'bg-stone-50 text-stone-600 border-stone-200 hover:bg-stone-100'
-                            }`}
-                          >
-                            {pct === 0 ? 'Empty' : `${pct}%`}
-                          </button>
-                        );
-                      })}
+                      <div className="h-2 w-full rounded-full bg-stone-100 overflow-hidden">
+                        <div
+                          className={`h-full rounded-full transition-all duration-300 ${barColor}`}
+                          style={{ width: `${forecast.stockPercent}%` }}
+                        />
+                      </div>
                     </div>
                   )}
 
                   {/* Status Pills */}
-                  <div className="flex items-center flex-wrap gap-1.5 pt-0.5">
+                  <div className="flex items-center flex-wrap gap-1.5">
                     <span
                       className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold border ${verdictBadge.cls}`}
                     >
@@ -562,48 +750,118 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
                   )}
                 </div>
 
-                {/* Action Buttons */}
+                {/* Action Buttons — Tailored per Tracking Type */}
                 <div className="flex items-center gap-2 pt-2 border-t border-stone-100">
                   {item.remainingPortions > 0 ? (
-                    <>
-                      <button
-                        type="button"
-                        onClick={() => onUsePortion(item.id, effectiveUseAmount)}
-                        className={`flex-1 inline-flex items-center justify-center gap-1.5 rounded-xl active:scale-[0.98] text-white py-2 px-3 text-xs font-semibold transition ${
-                          eatingMode === 'guests'
-                            ? 'bg-indigo-700 hover:bg-indigo-800'
-                            : 'bg-teal-700 hover:bg-teal-800'
-                        }`}
-                      >
-                        <Minus className="w-3.5 h-3.5" />
-                        {effectiveUseAmount === 1
-                          ? `${t(lang, 'usePortion')} 1`
-                          : `${t(lang, 'usePortion')} ${effectiveUseAmount} (${
-                              eatingMode === 'together' ? '2×' : `${servingMultiplier}×`
-                            })`}
-                      </button>
+                    isContinuous ? (
+                      <>
+                        {canPourServing ? (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => onUsePortion(item.id, continuousPourAmount)}
+                              className={`flex-1 inline-flex items-center justify-center gap-1.5 rounded-xl active:scale-[0.98] text-white py-2 px-3 text-xs font-semibold transition truncate ${
+                                eatingMode === 'guests'
+                                  ? 'bg-indigo-700 hover:bg-indigo-800'
+                                  : 'bg-teal-700 hover:bg-teal-800'
+                              }`}
+                              title={`Deduct ${continuousPourAmount} × ${item.portionLabel}`}
+                            >
+                              <Minus className="w-3.5 h-3.5 shrink-0" />
+                              <span className="truncate">
+                                {item.remainingPortions < 1
+                                  ? `Finish last ${item.portionLabel}`
+                                  : continuousPourAmount === 1
+                                  ? item.portionLabel
+                                  : `${continuousPourAmount} × ${item.portionLabel}`}
+                              </span>
+                            </button>
 
-                      {servingMultiplier > 1 && item.remainingPortions > 1 && (
+                            {continuousPourAmount > 1 && (
+                              <button
+                                type="button"
+                                onClick={() => onUsePortion(item.id, 1)}
+                                className="inline-flex items-center justify-center rounded-xl bg-stone-100 hover:bg-stone-200 text-stone-700 py-2 px-2.5 text-xs font-bold transition shrink-0"
+                                title={`Deduct just 1 × ${item.portionLabel}`}
+                              >
+                                -1
+                              </button>
+                            )}
+                          </>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              nextLowerPct === 0
+                                ? onMarkFinished(item.id)
+                                : onSetLevel(item.id, nextLowerPct)
+                            }
+                            className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-xl active:scale-[0.98] bg-stone-100 hover:bg-stone-200 text-stone-800 py-2 px-3 text-xs font-semibold transition"
+                          >
+                            <TrendingDown className="w-3.5 h-3.5 text-teal-700" />
+                            <span>Step down → {nextLowerLabel}</span>
+                          </button>
+                        )}
+
                         <button
                           type="button"
-                          onClick={() => onUsePortion(item.id, 1)}
-                          className="inline-flex items-center justify-center rounded-xl bg-stone-100 hover:bg-stone-200 text-stone-700 py-2 px-2.5 text-xs font-bold transition"
-                          title="Deduct just 1 portion"
+                          onClick={() => onMarkFinished(item.id)}
+                          className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-amber-50 hover:bg-amber-100 active:scale-[0.98] text-amber-900 border border-amber-200 py-2 px-3 text-xs font-semibold transition shrink-0"
+                          title={
+                            item.autoAddOnEmpty
+                              ? 'Mark empty & auto-add to shopping list'
+                              : 'Mark empty'
+                          }
                         >
-                          -1
+                          <Trash2 className="w-3.5 h-3.5" />
+                          {t(lang, 'finishedBtn')}
                         </button>
-                      )}
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => onUsePortion(item.id, effectiveUseAmount)}
+                          className={`flex-1 inline-flex items-center justify-center gap-1.5 rounded-xl active:scale-[0.98] text-white py-2 px-3 text-xs font-semibold transition ${
+                            eatingMode === 'guests'
+                              ? 'bg-indigo-700 hover:bg-indigo-800'
+                              : 'bg-teal-700 hover:bg-teal-800'
+                          }`}
+                        >
+                          <Minus className="w-3.5 h-3.5" />
+                          {effectiveUseAmount === 1
+                            ? `${t(lang, 'usePortion')} 1`
+                            : `${t(lang, 'usePortion')} ${effectiveUseAmount} (${
+                                eatingMode === 'together' ? '2×' : `${servingMultiplier}×`
+                              })`}
+                        </button>
 
-                      <button
-                        type="button"
-                        onClick={() => onMarkFinished(item.id)}
-                        className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-amber-50 hover:bg-amber-100 active:scale-[0.98] text-amber-900 border border-amber-200 py-2 px-3 text-xs font-semibold transition"
-                        title="Empty & auto-add to shopping list"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                        {t(lang, 'finishedBtn')}
-                      </button>
-                    </>
+                        {servingMultiplier > 1 && item.remainingPortions > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => onUsePortion(item.id, 1)}
+                            className="inline-flex items-center justify-center rounded-xl bg-stone-100 hover:bg-stone-200 text-stone-700 py-2 px-2.5 text-xs font-bold transition"
+                            title="Deduct just 1 portion"
+                          >
+                            -1
+                          </button>
+                        )}
+
+                        <button
+                          type="button"
+                          onClick={() => onMarkFinished(item.id)}
+                          className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-amber-50 hover:bg-amber-100 active:scale-[0.98] text-amber-900 border border-amber-200 py-2 px-3 text-xs font-semibold transition"
+                          title={
+                            item.autoAddOnEmpty
+                              ? 'Empty & auto-add to shopping list'
+                              : 'Mark finished'
+                          }
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          {t(lang, 'finishedBtn')}
+                        </button>
+                      </>
+                    )
                   ) : (
                     <button
                       type="button"
@@ -611,7 +869,7 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
                       className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-xl bg-stone-900 hover:bg-stone-800 text-white py-2 px-3 text-xs font-semibold transition"
                     >
                       <RefreshCw className="w-3.5 h-3.5" />
-                      {t(lang, 'restockBtn')} ({item.totalPortions} portions)
+                      {t(lang, 'restockBtn')} ({formatRestockLabel(item)})
                     </button>
                   )}
                 </div>
