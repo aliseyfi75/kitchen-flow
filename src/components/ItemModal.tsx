@@ -55,6 +55,7 @@ type EntryMode = 'portioned' | 'measured' | 'level_only';
 interface ItemModalProps {
   item: InventoryItem | null;
   initialTab?: 'basics' | 'nutrition';
+  initialCategory?: FoodCategory;
   stores: Store[];
   lang: UILanguage;
   onClose: () => void;
@@ -62,8 +63,16 @@ interface ItemModalProps {
   onDelete?: (itemId: string) => void;
 }
 
-function getInitialEntryMode(item: InventoryItem | null): EntryMode {
-  if (!item) return 'portioned';
+function getInitialEntryMode(
+  item: InventoryItem | null,
+  fallbackCategory?: FoodCategory
+): EntryMode {
+  if (!item) {
+    if (!fallbackCategory) return 'portioned';
+    const prof = getCategoryProfile(fallbackCategory);
+    if (prof.defaultTrackingMode === 'portioned') return 'portioned';
+    return prof.defaultContinuousStyle === 'measured' ? 'measured' : 'level_only';
+  }
   if (item.trackingMode === 'portioned') return 'portioned';
   return inferContinuousStyle(item) === 'measured' ? 'measured' : 'level_only';
 }
@@ -79,6 +88,7 @@ function addDaysToIsoDate(days: number): string {
 export const ItemModal: React.FC<ItemModalProps> = ({
   item,
   initialTab = 'basics',
+  initialCategory: presetCategory,
   stores,
   lang,
   onClose,
@@ -88,19 +98,24 @@ export const ItemModal: React.FC<ItemModalProps> = ({
   const isNew = !item;
   const labelInputRef = useRef<HTMLInputElement>(null);
 
-  // New items open on the fast Barcode + Category Quick-Start step; editing opens the form directly
-  const [step, setStep] = useState<'barcode_first' | 'form'>(isNew ? 'barcode_first' : 'form');
+  // New items open on Barcode + Category Quick-Start unless launched directly from a category section
+  const [step, setStep] = useState<'barcode_first' | 'form'>(
+    isNew && !presetCategory ? 'barcode_first' : 'form'
+  );
   const [activeTab, setActiveTab] = useState<'basics' | 'nutrition'>(initialTab);
 
-  const initialCategory: FoodCategory = item?.category ?? 'dairy';
+  const initialCategory: FoodCategory = item?.category ?? presetCategory ?? 'dairy';
   const initialProfile = getCategoryProfile(initialCategory);
+  const initialPreset = initialProfile.measuredPresets[0];
 
   // Basics state
   const [name, setName] = useState(item?.name ?? '');
   const [alias, setAlias] = useState(item?.alias ?? '');
   const [zone, setZone] = useState<StorageZone>(item?.zone ?? initialProfile.defaultZone);
   const [category, setCategory] = useState<FoodCategory>(initialCategory);
-  const [entryMode, setEntryMode] = useState<EntryMode>(() => getInitialEntryMode(item));
+  const [entryMode, setEntryMode] = useState<EntryMode>(() =>
+    getInitialEntryMode(item, presetCategory)
+  );
 
   // Portioned / Countable state
   const [totalPortions, setTotalPortions] = useState(
@@ -113,26 +128,30 @@ export const ItemModal: React.FC<ItemModalProps> = ({
   const [portionLabel, setPortionLabel] = useState(
     item?.portionLabel && item.portionLabel !== 'container'
       ? item.portionLabel
+      : presetCategory && initialPreset?.servingLabel
+      ? initialPreset.servingLabel
       : initialProfile.defaultPortionLabel
   );
 
   // Continuous (Measured + Simple Level) state
   const [containerSize, setContainerSize] = useState<number>(
-    item?.containerSize ?? initialProfile.measuredPresets[0]?.size ?? 1
+    item?.containerSize ?? initialPreset?.size ?? 1
   );
   const [containerUnit, setContainerUnit] = useState<MeasureUnit>(
-    item?.containerUnit ?? initialProfile.defaultUnit
+    item?.containerUnit ?? initialPreset?.unit ?? initialProfile.defaultUnit
   );
   const [levelPercent, setLevelPercent] = useState<number>(() =>
     item ? getClampedStockPercent(item) : 100
   );
   const [levelEdited, setLevelEdited] = useState(false);
   const [trackServings, setTrackServings] = useState<boolean>(() =>
-    item ? hasServingPourAction(item) : false
+    item
+      ? hasServingPourAction(item)
+      : Boolean(presetCategory && initialPreset?.servingLabel && initialPreset?.servingsPerContainer)
   );
   const [servingsPerContainer, setServingsPerContainer] = useState<number>(() => {
     if (item && hasServingPourAction(item)) return item.totalPortions;
-    return initialProfile.measuredPresets[0]?.servingsPerContainer ?? 8;
+    return initialPreset?.servingsPerContainer ?? 8;
   });
 
   // Shared packaging, store, cadence & freshness state
