@@ -56,13 +56,23 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
   // Track whether the latest state change came from remote Realtime sync so we don't write it back
   const skipNextCloudSaveRef = useRef(false);
   const cloudReadyRef = useRef(false);
+  const lastCloudUpdatedAtRef = useRef<string>('');
+  const pendingOfflinePushRef = useRef(false);
+
+  const notify = useCallback((text: string, tone: ToastMessage['tone'] = 'teal') => {
+    const id = String(Date.now());
+    setToast({ id, text, tone });
+    window.setTimeout(() => {
+      setToast((curr) => (curr?.id === id ? null : curr));
+    }, 3400);
+  }, []);
 
   // Always cache locally for instant startup & offline resilience
   useEffect(() => {
     kitchenRepo.save(state);
   }, [state]);
 
-  // Initial load + Supabase Realtime subscription when signed into cloud household
+  // Initial load + Supabase Realtime + wake-up / reconnect auto-sync
   useEffect(() => {
     if (!cloudContext || !supabase) {
       cloudReadyRef.current = false;
@@ -74,11 +84,77 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
     const { householdId, displayName } = cloudContext;
     const actorTag = `${displayName}:${CLIENT_INSTANCE_ID}`;
 
+    const applyRemoteRow = (
+      row: { state?: Partial<KitchenState>; updated_at?: string; updated_by?: string },
+      showBanner: boolean
+    ) => {
+      if (!row?.state) return;
+      if (row.updated_by === actorTag) return;
+      if (row.updated_at && row.updated_at <= lastCloudUpdatedAtRef.current) return;
+
+      lastCloudUpdatedAtRef.current = row.updated_at || new Date().toISOString();
+      skipNextCloudSaveRef.current = true;
+      setState(mergeRemoteState(row.state));
+      setSyncStatus('synced');
+
+      if (showBanner) {
+        const who = row.updated_by?.split(':')[0] || 'Household';
+        notify(`Synced latest changes from ${who}`, 'teal');
+      }
+    };
+
+    const pushLocalState = async () => {
+      if (!supabase) return;
+      const nowIso = new Date().toISOString();
+      setSyncStatus('saving');
+      const { error } = await supabase.from('household_state').upsert({
+        household_id: householdId,
+        state: stateRef.current,
+        updated_at: nowIso,
+        updated_by: actorTag,
+      });
+      if (!active) return;
+      if (error) {
+        pendingOfflinePushRef.current = true;
+        setSyncStatus('offline');
+      } else {
+        pendingOfflinePushRef.current = false;
+        lastCloudUpdatedAtRef.current = nowIso;
+        setSyncStatus('synced');
+      }
+    };
+
+    const pullLatestFromCloud = async (showBanner: boolean) => {
+      if (!supabase || !active) return;
+      if (pendingOfflinePushRef.current) {
+        await pushLocalState();
+        return;
+      }
+      const { data, error } = await supabase
+        .from('household_state')
+        .select('state, updated_at, updated_by')
+        .eq('household_id', householdId)
+        .maybeSingle();
+
+      if (!active) return;
+      if (error) {
+        setSyncStatus('offline');
+        return;
+      }
+      if (data?.state) {
+        applyRemoteRow(
+          data as { state: Partial<KitchenState>; updated_at?: string; updated_by?: string },
+          showBanner
+        );
+      }
+      setSyncStatus('synced');
+    };
+
     const initCloud = async () => {
       setSyncStatus('loading');
       const { data, error } = await supabase!
         .from('household_state')
-        .select('state, updated_by')
+        .select('state, updated_at, updated_by')
         .eq('household_id', householdId)
         .maybeSingle();
 
@@ -90,16 +166,19 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
       }
 
       if (data?.state) {
+        lastCloudUpdatedAtRef.current = data.updated_at || '';
         skipNextCloudSaveRef.current = true;
         setState(mergeRemoteState(data.state as Partial<KitchenState>));
       } else {
         // First time ever for this household: seed initial state to cloud
+        const nowIso = new Date().toISOString();
         await supabase!.from('household_state').upsert({
           household_id: householdId,
           state: stateRef.current,
-          updated_at: new Date().toISOString(),
+          updated_at: nowIso,
           updated_by: actorTag,
         });
+        lastCloudUpdatedAtRef.current = nowIso;
       }
 
       cloudReadyRef.current = true;
@@ -108,6 +187,7 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
 
     initCloud();
 
+    // 1. Live WebSocket push (instant ~200ms sync when both phones are open)
     const channel = supabase
       .channel(`household-${householdId}`)
       .on(
@@ -119,23 +199,47 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
           filter: `household_id=eq.${householdId}`,
         },
         (payload) => {
-          const row = payload.new as { state?: Partial<KitchenState>; updated_by?: string } | null;
-          if (!row?.state || row.updated_by === actorTag) return;
-          skipNextCloudSaveRef.current = true;
-          setState(mergeRemoteState(row.state));
-          setSyncStatus('synced');
+          const row = payload.new as {
+            state?: Partial<KitchenState>;
+            updated_at?: string;
+            updated_by?: string;
+          } | null;
+          if (row) applyRemoteRow(row, true);
         }
       )
       .subscribe();
 
+    // 2. Wake-up & reconnect sync (handles iOS/Android background sleep & grocery store dead zones)
+    const handleResume = () => {
+      if (document.visibilityState === 'visible') {
+        pullLatestFromCloud(true);
+      }
+    };
+    const handleOnline = () => {
+      pullLatestFromCloud(true);
+    };
+
+    document.addEventListener('visibilitychange', handleResume);
+    window.addEventListener('online', handleOnline);
+
+    // 3. Lightweight 25s fallback poll while active in foreground (safety net if WebSocket sleeps)
+    const intervalId = window.setInterval(() => {
+      if (document.visibilityState === 'visible' && cloudReadyRef.current) {
+        pullLatestFromCloud(true);
+      }
+    }, 25000);
+
     return () => {
       active = false;
       cloudReadyRef.current = false;
+      document.removeEventListener('visibilitychange', handleResume);
+      window.removeEventListener('online', handleOnline);
+      window.clearInterval(intervalId);
       supabase!.removeChannel(channel);
     };
-  }, [cloudContext?.householdId, cloudContext?.displayName]);
+  }, [cloudContext?.householdId, cloudContext?.displayName, notify]);
 
-  // Debounced cloud push on local edits
+  // Debounced auto-save to cloud on any local edit
   useEffect(() => {
     if (!cloudContext || !supabase || !cloudReadyRef.current) return;
     if (skipNextCloudSaveRef.current) {
@@ -146,25 +250,25 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
     setSyncStatus('saving');
     const actorTag = `${cloudContext.displayName}:${CLIENT_INSTANCE_ID}`;
     const timer = window.setTimeout(async () => {
+      const nowIso = new Date().toISOString();
       const { error } = await supabase!.from('household_state').upsert({
         household_id: cloudContext.householdId,
         state: stateRef.current,
-        updated_at: new Date().toISOString(),
+        updated_at: nowIso,
         updated_by: actorTag,
       });
-      setSyncStatus(error ? 'offline' : 'synced');
+      if (error) {
+        pendingOfflinePushRef.current = true;
+        setSyncStatus('offline');
+      } else {
+        pendingOfflinePushRef.current = false;
+        lastCloudUpdatedAtRef.current = nowIso;
+        setSyncStatus('synced');
+      }
     }, 350);
 
     return () => window.clearTimeout(timer);
   }, [state, cloudContext?.householdId, cloudContext?.displayName]);
-
-  const notify = useCallback((text: string, tone: ToastMessage['tone'] = 'teal') => {
-    const id = String(Date.now());
-    setToast({ id, text, tone });
-    window.setTimeout(() => {
-      setToast((curr) => (curr?.id === id ? null : curr));
-    }, 3400);
-  }, []);
 
   const ensureOnShoppingList = (
     shoppingList: ShoppingItem[],
