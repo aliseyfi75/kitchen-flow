@@ -7,6 +7,7 @@ import {
   Clock,
   Flame,
   Heart,
+  Mic,
   PackageCheck,
   Plus,
   Search,
@@ -40,6 +41,7 @@ import {
 } from '../utils/mealEngine';
 import { generateMealsWithGemini } from '../services/geminiEdge';
 import { getCategoryProfile, inferProductDefaultsFromText } from '../utils/productCategories';
+import { VoiceFoodModal } from './VoiceFoodModal';
 
 interface MealPlannerViewProps {
   items: InventoryItem[];
@@ -131,6 +133,7 @@ export const MealPlannerView: React.FC<MealPlannerViewProps> = ({
 
   // Add Meal form state
   const [showAddRecipe, setShowAddRecipe] = useState(false);
+  const [showVoiceModal, setShowVoiceModal] = useState(false);
   const [recName, setRecName] = useState('');
   const [recAlias, setRecAlias] = useState('');
   const [recMinutes, setRecMinutes] = useState(20);
@@ -952,14 +955,25 @@ export const MealPlannerView: React.FC<MealPlannerViewProps> = ({
               Search any meal, filter by what you can cook right now, or mark one cooked to deduct exact ingredients
             </p>
           </div>
-          <button
-            type="button"
-            onClick={() => setShowAddRecipe((v) => !v)}
-            className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-teal-700 hover:bg-teal-800 text-white px-4 py-2 text-xs font-bold shadow-xs shrink-0"
-          >
-            <Plus className="w-4 h-4" />
-            {t(lang, 'addRecipe')}
-          </button>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => setShowVoiceModal(true)}
+              className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-indigo-700 hover:bg-indigo-800 text-white px-3.5 py-2 text-xs font-bold shadow-xs transition"
+              title="Add a new food by speaking in English or Farsi"
+            >
+              <Mic className="w-4 h-4" />
+              Add by Voice
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowAddRecipe((v) => !v)}
+              className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-teal-700 hover:bg-teal-800 text-white px-4 py-2 text-xs font-bold shadow-xs shrink-0"
+            >
+              <Plus className="w-4 h-4" />
+              {t(lang, 'addRecipe')}
+            </button>
+          </div>
         </div>
 
         {/* Add New Meal Form (Custom Cuisine + New Ingredients -> Inventory + Exact Quantities + Auto-Nutrition!) */}
@@ -1620,6 +1634,19 @@ export const MealPlannerView: React.FC<MealPlannerViewProps> = ({
           </div>
         )}
       </div>
+
+      {showVoiceModal && (
+        <VoiceFoodModal
+          items={items}
+          stores={stores}
+          cuisines={cuisines}
+          lang={lang}
+          onClose={() => setShowVoiceModal(false)}
+          onConfirmSave={(recipe, newInventoryItems) => {
+            onAddRecipe(recipe, newInventoryItems);
+          }}
+        />
+      )}
     </div>
   );
 };

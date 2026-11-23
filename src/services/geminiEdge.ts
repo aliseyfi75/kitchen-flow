@@ -1,12 +1,26 @@
 import {
+  CookingTool,
+  FoodCategory,
   InventoryItem,
   MealRecipe,
   NutritionFacts,
   ReceiptParsedItem,
+  StorageZone,
   Store,
+  TrackingMode,
 } from '../types/kitchen';
 import { MealPlanRequest } from '../utils/mealEngine';
 import { matchInventoryItem } from '../utils/scannerSimulation';
+import {
+  getCategoryProfile,
+  inferProductDefaultsFromText,
+} from '../utils/productCategories';
+import {
+  matchVoiceIngredientToKitchen,
+  parseVoiceFoodLocally,
+  VoiceParsedFood,
+  VoiceParsedIngredient,
+} from '../utils/voiceFoodParser';
 import { isSupabaseConfigured, supabase } from './supabaseClient';
 
 /**
@@ -226,4 +240,217 @@ export async function generateMealsWithGemini(
     quickSteps: r.quickSteps || ['Prepare and cook ingredients until done.'],
     ingredients: r.ingredients || [],
   }));
+}
+
+async function blobToBase64(blob: Blob): Promise<{ base64: string; mimeType: string }> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result || '');
+      const commaIdx = result.indexOf(',');
+      const base64 = commaIdx >= 0 ? result.slice(commaIdx + 1) : result;
+      // Strip codec suffixes (e.g. "audio/webm;codecs=opus" -> "audio/webm") for Gemini inlineData compatibility
+      const cleanMime = (blob.type || 'audio/webm').split(';')[0].trim() || 'audio/webm';
+      resolve({ base64, mimeType: cleanMime });
+    };
+    reader.onerror = () => reject(new Error('Could not read recorded audio'));
+    reader.readAsDataURL(blob);
+  });
+}
+
+const VALID_TOOLS: CookingTool[] = [
+  'air_fryer',
+  'oven',
+  'pan',
+  'grill',
+  'instant_pot',
+  'slow_cooker',
+  'blender',
+  'no_cook',
+];
+
+const VALID_CATEGORIES: FoodCategory[] = [
+  'protein',
+  'dairy',
+  'produce',
+  'beverages',
+  'grains',
+  'condiments',
+  'spices',
+  'pantry_staple',
+  'snacks',
+  'prepared',
+];
+
+export async function parseVoiceFoodWithGemini(params: {
+  audioBlob?: Blob | null;
+  transcript?: string;
+  languageHint: 'auto' | 'en' | 'fa';
+  inventory: InventoryItem[];
+  defaultStoreId: string;
+  cuisines: string[];
+}): Promise<VoiceParsedFood> {
+  const { audioBlob, transcript, languageHint, inventory, defaultStoreId, cuisines } = params;
+  const cleanTranscript = (transcript || '').trim();
+
+  // Offline / Local Demo mode fallback when Supabase isn't configured
+  if (!isSupabaseConfigured || !supabase) {
+    if (!cleanTranscript) {
+      throw new Error(
+        'Audio transcription requires Gemini Cloud sync, or type/dictate your food description in the box below.'
+      );
+    }
+    return parseVoiceFoodLocally(cleanTranscript, inventory, defaultStoreId, cuisines);
+  }
+
+  let audioBase64: string | undefined;
+  let audioMimeType: string | undefined;
+  if (audioBlob && audioBlob.size > 0) {
+    const encoded = await blobToBase64(audioBlob);
+    audioBase64 = encoded.base64;
+    audioMimeType = encoded.mimeType;
+  }
+
+  const raw = await invokeGeminiEdge<{
+    transcript?: string;
+    name?: string;
+    alias?: string;
+    cuisine?: string;
+    mealType?: MealRecipe['mealType'];
+    prepMinutes?: number;
+    tools?: string[];
+    quickSteps?: string[];
+    ingredients?: {
+      spokenText?: string;
+      matchedItemId?: string | null;
+      name?: string;
+      alias?: string;
+      portionsNeeded?: number;
+      portionLabel?: string;
+      category?: string;
+      zone?: string;
+      trackingMode?: string;
+      packDescription?: string;
+    }[];
+  }>({
+    action: 'parse_voice_food',
+    audioBase64,
+    audioMimeType,
+    transcript: cleanTranscript || undefined,
+    languageHint,
+    cuisines,
+    existingItems: inventory.map((i) => ({
+      id: i.id,
+      name: i.name,
+      alias: i.alias,
+      zone: i.zone,
+      category: i.category,
+      portionLabel: i.portionLabel,
+      trackingMode: i.trackingMode,
+    })),
+  });
+
+  const itemById = new Map(inventory.map((i) => [i.id, i]));
+  const parsedIngredients: VoiceParsedIngredient[] = (raw.ingredients || [])
+    .filter((ing) => (ing.name || ing.alias || ing.spokenText || '').trim().length > 0)
+    .map((ing, idx) => {
+      const candidateName = (ing.name || ing.spokenText || '').trim();
+      const candidateAlias = (ing.alias || '').trim();
+      const directMatch =
+        ing.matchedItemId && itemById.has(ing.matchedItemId)
+          ? itemById.get(ing.matchedItemId)
+          : undefined;
+      const fallbackMatch = directMatch
+        ? null
+        : matchVoiceIngredientToKitchen(candidateName, candidateAlias, inventory);
+      const matched = directMatch ?? fallbackMatch?.item;
+
+      if (matched) {
+        return {
+          id: `ving-ai-${idx}-${Date.now()}`,
+          spokenText: ing.spokenText || candidateName,
+          matchedItemId: matched.id,
+          matchConfidence: directMatch ? 'exact' : fallbackMatch?.confidence ?? 'fuzzy',
+          name: matched.name,
+          alias: matched.alias || candidateAlias,
+          portionsNeeded: Math.max(0.25, Number(ing.portionsNeeded) || 1),
+          portionLabel: ing.portionLabel?.trim() || matched.portionLabel || '1 portion',
+          suggestedCategory: matched.category,
+          suggestedZone: matched.zone,
+          suggestedTrackingMode: matched.trackingMode,
+          suggestedPackDescription: matched.packDescription,
+          confirmCreateInKitchen: false,
+          initialInStock: matched.remainingPortions > 0,
+          initialStockCount: matched.remainingPortions,
+          storeId: matched.defaultStoreId || defaultStoreId,
+        };
+      }
+
+      const inferred = inferProductDefaultsFromText(`${candidateName} ${candidateAlias}`);
+      const rawCat = ing.category as FoodCategory | undefined;
+      const cat: FoodCategory =
+        rawCat && VALID_CATEGORIES.includes(rawCat)
+          ? rawCat
+          : inferred?.category ?? 'produce';
+      const prof = getCategoryProfile(cat);
+      const rawZone = ing.zone as StorageZone | undefined;
+      const zone: StorageZone =
+        rawZone === 'fridge' || rawZone === 'freezer' || rawZone === 'pantry'
+          ? rawZone
+          : inferred?.zone ?? prof.defaultZone;
+      const trackingMode: TrackingMode =
+        ing.trackingMode === 'continuous' || ing.trackingMode === 'portioned'
+          ? ing.trackingMode
+          : inferred?.trackingMode ?? prof.defaultTrackingMode;
+
+      return {
+        id: `ving-ai-${idx}-${Date.now()}`,
+        spokenText: ing.spokenText || candidateName,
+        matchedItemId: undefined,
+        matchConfidence: 'new',
+        name: candidateName,
+        alias: candidateAlias,
+        portionsNeeded: Math.max(0.25, Number(ing.portionsNeeded) || 1),
+        portionLabel: ing.portionLabel?.trim() || prof.defaultPortionLabel,
+        suggestedCategory: cat,
+        suggestedZone: zone,
+        suggestedTrackingMode: trackingMode,
+        suggestedPackDescription:
+          ing.packDescription?.trim() ||
+          (trackingMode === 'continuous'
+            ? prof.levelPackPresets[0] ?? '1 container'
+            : `${prof.defaultPortionCount} × ${prof.defaultPortionLabel}`),
+        confirmCreateInKitchen: true,
+        initialInStock: false,
+        initialStockCount: 0,
+        storeId: defaultStoreId,
+      };
+    });
+
+  const validTools = (raw.tools || []).filter((tl): tl is CookingTool =>
+    VALID_TOOLS.includes(tl as CookingTool)
+  );
+  const mealType: MealRecipe['mealType'] =
+    raw.mealType === 'breakfast' ||
+    raw.mealType === 'lunch' ||
+    raw.mealType === 'dinner' ||
+    raw.mealType === 'snack'
+      ? raw.mealType
+      : 'dinner';
+
+  return {
+    transcript: raw.transcript || cleanTranscript,
+    name: (raw.name || 'New Voice Food').trim(),
+    alias: (raw.alias || '').trim(),
+    cuisine: (raw.cuisine || cuisines[0] || 'Persian').trim(),
+    mealType,
+    prepMinutes: Math.max(5, Math.min(240, Number(raw.prepMinutes) || 20)),
+    tools: validTools.length > 0 ? validTools : ['pan'],
+    quickSteps:
+      Array.isArray(raw.quickSteps) && raw.quickSteps.length > 0
+        ? raw.quickSteps.filter(Boolean)
+        : ['Prepare ingredients and cook until done.'],
+    ingredients: parsedIngredients,
+    source: audioBase64 ? 'gemini_audio' : 'gemini_text',
+  };
 }
