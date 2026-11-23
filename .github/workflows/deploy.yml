@@ -79,5 +79,5 @@ jobs:
         if: steps.check.outputs.enabled == 'true'
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-        run: supabase functions deploy gemini-assistant --project-ref "${{ steps.check.outputs.project_ref }}" --no-verify-jwt
+        run: supabase functions deploy gemini-assistant --remote="${{ steps.check.outputs.project_ref }}" --no-verify-jwt --yes
 
