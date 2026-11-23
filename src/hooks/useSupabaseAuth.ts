@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
-import { isSupabaseConfigured, supabase } from '../services/supabaseClient';
+import {
+  isSupabaseConfigured,
+  setKeepSignedInPreference,
+  supabase,
+} from '../services/supabaseClient';
 
 export interface HouseholdMember {
   userId: string;
@@ -15,7 +19,7 @@ export interface AuthState {
   session: Session | null;
   member: HouseholdMember | null;
   membershipError: string | null;
-  signIn: (email: string, password: string) => Promise<string | null>;
+  signIn: (email: string, password: string, keepSignedIn?: boolean) => Promise<string | null>;
   signOut: () => Promise<void>;
 }
 
@@ -89,15 +93,19 @@ export function useSupabaseAuth(): AuthState {
     };
   }, [loadMembership]);
 
-  const signIn = useCallback(async (email: string, password: string): Promise<string | null> => {
-    if (!supabase) return 'Supabase is not configured.';
-    const { error } = await supabase.auth.signInWithPassword({
-      email: email.trim(),
-      password,
-    });
-    if (error) return error.message;
-    return null;
-  }, []);
+  const signIn = useCallback(
+    async (email: string, password: string, keepSignedIn = true): Promise<string | null> => {
+      if (!supabase) return 'Supabase is not configured.';
+      setKeepSignedInPreference(keepSignedIn);
+      const { error } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password,
+      });
+      if (error) return error.message;
+      return null;
+    },
+    []
+  );
 
   const signOut = useCallback(async () => {
     if (!supabase) return;

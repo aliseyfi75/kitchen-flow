@@ -5,7 +5,7 @@ interface AuthGateProps {
   loading: boolean;
   membershipError: string | null;
   signedInEmail?: string | null;
-  onSignIn: (email: string, password: string) => Promise<string | null>;
+  onSignIn: (email: string, password: string, keepSignedIn?: boolean) => Promise<string | null>;
   onSignOut: () => Promise<void>;
 }
 
@@ -18,6 +18,7 @@ export const AuthGate: React.FC<AuthGateProps> = ({
 }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [keepSignedIn, setKeepSignedIn] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -26,7 +27,7 @@ export const AuthGate: React.FC<AuthGateProps> = ({
     if (!email.trim() || !password) return;
     setSubmitting(true);
     setErrorMsg(null);
-    const err = await onSignIn(email, password);
+    const err = await onSignIn(email, password, keepSignedIn);
     setSubmitting(false);
     if (err) setErrorMsg(err);
   };
@@ -117,6 +118,18 @@ export const AuthGate: React.FC<AuthGateProps> = ({
                   className="w-full rounded-xl border border-stone-200 px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
                 />
               </div>
+
+              <label className="flex items-center gap-2.5 text-xs text-stone-700 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={keepSignedIn}
+                  onChange={(e) => setKeepSignedIn(e.target.checked)}
+                  className="rounded border-stone-300 text-teal-700 focus:ring-teal-500"
+                />
+                <span>
+                  <strong>Keep me signed in</strong> on this device
+                </span>
+              </label>
 
               <button
                 type="submit"
