@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Activity,
-  Globe,
   Lock,
   Plus,
   RotateCcw,
@@ -228,7 +227,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </button>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-2">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
           <div className="rounded-2xl bg-stone-50 border border-stone-200/80 p-3">
             <label className="block text-[11px] font-semibold text-stone-500 mb-1.5">
               Active User (Demo Switcher)
@@ -248,37 +247,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   {user}
                 </button>
               ))}
-            </div>
-          </div>
-
-          <div className="rounded-2xl bg-stone-50 border border-stone-200/80 p-3">
-            <label className="block text-[11px] font-semibold text-stone-500 mb-1.5 flex items-center gap-1">
-              <Globe className="w-3.5 h-3.5" />
-              UI Language
-            </label>
-            <div className="grid grid-cols-2 gap-1.5">
-              <button
-                type="button"
-                onClick={() => onUpdateSettings({ language: 'en' })}
-                className={`py-1.5 rounded-lg text-xs font-semibold transition ${
-                  lang === 'en'
-                    ? 'bg-stone-900 text-white'
-                    : 'bg-white text-stone-600 border border-stone-200'
-                }`}
-              >
-                English
-              </button>
-              <button
-                type="button"
-                onClick={() => onUpdateSettings({ language: 'fa' })}
-                className={`py-1.5 rounded-lg text-xs font-semibold transition ${
-                  lang === 'fa'
-                    ? 'bg-stone-900 text-white'
-                    : 'bg-white text-stone-600 border border-stone-200'
-                }`}
-              >
-                فارسی (RTL)
-              </button>
             </div>
           </div>
 

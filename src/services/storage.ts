@@ -35,6 +35,7 @@ export class LocalStorageKitchenRepository implements KitchenRepository {
         settings: {
           ...defaults.settings,
           ...parsed.settings,
+          language: 'en',
         },
         weeklyPlan: (parsed.weeklyPlan || []).map((m) => ({
           ...m,

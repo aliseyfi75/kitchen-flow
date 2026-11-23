@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import {
   ChefHat,
-  Globe,
   Layers,
   Lock,
   Refrigerator,
@@ -23,7 +22,7 @@ type TabId = 'kitchen' | 'shopping' | 'meals' | 'settings';
 export function App() {
   const store = useKitchenStore();
   const { state, toast } = store;
-  const lang = state.settings.language;
+  const lang = 'en' as const;
   const uiMode = state.settings.uiMode;
 
   const [activeTab, setActiveTab] = useState<TabId>('kitchen');
@@ -31,9 +30,9 @@ export function App() {
   const [showReceiptScanner, setShowReceiptScanner] = useState(false);
 
   useEffect(() => {
-    document.documentElement.dir = lang === 'fa' ? 'rtl' : 'ltr';
-    document.documentElement.lang = lang;
-  }, [lang]);
+    document.documentElement.dir = 'ltr';
+    document.documentElement.lang = 'en';
+  }, []);
 
   const essentialShoppingCount = state.shoppingList.filter(
     (s) => s.priority === 'essential' && !s.checked
@@ -98,7 +97,7 @@ export function App() {
             })}
           </nav>
 
-          {/* Header Controls: Simple / Detailed Toggle + EN/FA + Login Gate */}
+          {/* Header Controls: Simple / Detailed Toggle + Login Gate */}
           <div className="flex items-center gap-1.5 shrink-0">
             {/* Simple / Detailed Mode Switch */}
             <div
@@ -133,18 +132,6 @@ export function App() {
                 {t(lang, 'detailedMode')}
               </button>
             </div>
-
-            <button
-              type="button"
-              onClick={() =>
-                store.updateSettings({ language: lang === 'en' ? 'fa' : 'en' })
-              }
-              className="inline-flex items-center gap-1 rounded-xl border border-stone-200 bg-white hover:bg-stone-50 px-2.5 py-1.5 text-xs font-semibold text-stone-700"
-              title="Toggle English / Persian UI"
-            >
-              <Globe className="w-3.5 h-3.5 text-teal-700" />
-              {lang === 'en' ? 'فا' : 'EN'}
-            </button>
 
             <button
               type="button"
