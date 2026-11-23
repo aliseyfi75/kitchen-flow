@@ -15,12 +15,17 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-// Cost-optimized model ladder:
-// Always try the cheapest / highest free-tier quota model first (gemini-2.5-flash-lite),
-// and only fall back to gemini-2.5-flash if Flash-Lite fails or hits quota.
+// Cost-optimized model ladder (Nov 2026):
+// 1. gemini-3.1-flash-lite ($0.25/$1.50 per 1M, Free Tier) — cheapest GA multimodal model open to all accounts
+// 2. gemini-3.5-flash-lite ($0.30/$2.50 per 1M, Free Tier) — official 2.5-flash replacement with stronger doc/multimodal parsing
+// 3. gemini-3.8-flash ($0.75/$3.75 per 1M, Free Tier) — fallback if Flash-Lite is unavailable or hits quota
 // Also automatically tries Google AI Studio endpoint first and falls back to Vertex AI Express Mode
 // if the AQ. key was provisioned via Google Cloud Vertex Express.
-const MODEL_LADDER = ['gemini-2.5-flash-lite', 'gemini-2.5-flash'];
+const MODEL_LADDER: { id: string; thinkingLevel: 'minimal' | 'low' }[] = [
+  { id: 'gemini-3.1-flash-lite', thinkingLevel: 'minimal' },
+  { id: 'gemini-3.5-flash-lite', thinkingLevel: 'minimal' },
+  { id: 'gemini-3.8-flash', thinkingLevel: 'low' },
+];
 
 function buildEndpointUrls(model: string, apiKey: string): string[] {
   const encodedKey = encodeURIComponent(apiKey);
@@ -30,10 +35,19 @@ function buildEndpointUrls(model: string, apiKey: string): string[] {
   ];
 }
 
+function parseJsonResponseText(raw: string): unknown {
+  const trimmed = raw.trim();
+  const unfenced = trimmed
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/, '')
+    .trim();
+  return JSON.parse(unfenced);
+}
+
 async function callGemini(apiKey: string, parts: unknown[], systemInstruction: string) {
   let lastError: Error | null = null;
 
-  for (const model of MODEL_LADDER) {
+  for (const { id: model, thinkingLevel } of MODEL_LADDER) {
     const urls = buildEndpointUrls(model, apiKey);
     for (const url of urls) {
       try {
@@ -44,9 +58,9 @@ async function callGemini(apiKey: string, parts: unknown[], systemInstruction: s
             systemInstruction: { parts: [{ text: systemInstruction }] },
             contents: [{ role: 'user', parts }],
             generationConfig: {
-              temperature: 0.35,
-              maxOutputTokens: 2048,
+              maxOutputTokens: 3072,
               responseMimeType: 'application/json',
+              thinkingConfig: { thinkingLevel },
             },
           }),
         });
@@ -54,20 +68,32 @@ async function callGemini(apiKey: string, parts: unknown[], systemInstruction: s
         if (!response.ok) {
           const errText = await response.text();
           lastError = new Error(`Gemini (${model}) error ${response.status}: ${errText.slice(0, 220)}`);
-          // If 401/403/400 on AI Studio, try Vertex Express URL next; otherwise move to next model
-          if (response.status === 401 || response.status === 403 || response.status === 400) {
+          // If 401/403/400/404 on AI Studio, try Vertex Express URL next; otherwise move to next model
+          if (
+            response.status === 401 ||
+            response.status === 403 ||
+            response.status === 400 ||
+            response.status === 404
+          ) {
             continue;
           }
           break;
         }
 
         const data = await response.json();
-        const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+        const responseParts = Array.isArray(data?.candidates?.[0]?.content?.parts)
+          ? data.candidates[0].content.parts
+          : [];
+        const textPart =
+          responseParts.find(
+            (p: { text?: string; thought?: boolean }) => Boolean(p?.text) && !p?.thought
+          ) ?? responseParts[responseParts.length - 1];
+        const rawText = textPart?.text;
         if (!rawText) {
           lastError = new Error(`Gemini (${model}) returned an empty response`);
           continue;
         }
-        return JSON.parse(rawText);
+        return parseJsonResponseText(rawText);
       } catch (err) {
         lastError = err instanceof Error ? err : new Error(String(err));
       }
