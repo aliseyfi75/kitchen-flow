@@ -18,46 +18,59 @@ const corsHeaders = {
 // Cost-optimized model ladder:
 // Always try the cheapest / highest free-tier quota model first (gemini-2.5-flash-lite),
 // and only fall back to gemini-2.5-flash if Flash-Lite fails or hits quota.
+// Also automatically tries Google AI Studio endpoint first and falls back to Vertex AI Express Mode
+// if the AQ. key was provisioned via Google Cloud Vertex Express.
 const MODEL_LADDER = ['gemini-2.5-flash-lite', 'gemini-2.5-flash'];
+
+function buildEndpointUrls(model: string, apiKey: string): string[] {
+  const encodedKey = encodeURIComponent(apiKey);
+  return [
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodedKey}`,
+    `https://aiplatform.googleapis.com/v1/publishers/google/models/${model}:generateContent?key=${encodedKey}`,
+  ];
+}
 
 async function callGemini(apiKey: string, parts: unknown[], systemInstruction: string) {
   let lastError: Error | null = null;
 
   for (const model of MODEL_LADDER) {
-    try {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(
-        apiKey
-      )}`;
+    const urls = buildEndpointUrls(model, apiKey);
+    for (const url of urls) {
+      try {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            systemInstruction: { parts: [{ text: systemInstruction }] },
+            contents: [{ role: 'user', parts }],
+            generationConfig: {
+              temperature: 0.35,
+              maxOutputTokens: 2048,
+              responseMimeType: 'application/json',
+            },
+          }),
+        });
 
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          systemInstruction: { parts: [{ text: systemInstruction }] },
-          contents: [{ role: 'user', parts }],
-          generationConfig: {
-            temperature: 0.35,
-            maxOutputTokens: 2048,
-            responseMimeType: 'application/json',
-          },
-        }),
-      });
+        if (!response.ok) {
+          const errText = await response.text();
+          lastError = new Error(`Gemini (${model}) error ${response.status}: ${errText.slice(0, 220)}`);
+          // If 401/403/400 on AI Studio, try Vertex Express URL next; otherwise move to next model
+          if (response.status === 401 || response.status === 403 || response.status === 400) {
+            continue;
+          }
+          break;
+        }
 
-      if (!response.ok) {
-        const errText = await response.text();
-        lastError = new Error(`Gemini (${model}) error ${response.status}: ${errText.slice(0, 220)}`);
-        continue;
+        const data = await response.json();
+        const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (!rawText) {
+          lastError = new Error(`Gemini (${model}) returned an empty response`);
+          continue;
+        }
+        return JSON.parse(rawText);
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
       }
-
-      const data = await response.json();
-      const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (!rawText) {
-        lastError = new Error(`Gemini (${model}) returned an empty response`);
-        continue;
-      }
-      return JSON.parse(rawText);
-    } catch (err) {
-      lastError = err instanceof Error ? err : new Error(String(err));
     }
   }
 
