@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Activity,
+  PlayCircle,
   Plus,
   Search,
   SlidersHorizontal,
@@ -23,6 +24,7 @@ interface SettingsViewProps {
   onAddStore: (store: Omit<Store, 'id'>) => void;
   onUpdateStore: (storeId: string, patch: Partial<Omit<Store, 'id'>>) => void;
   onDeleteStore: (storeId: string) => void;
+  onReplayTour: () => void;
 }
 
 const LearnedRhythmRow: React.FC<{
@@ -161,6 +163,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   onAddStore,
   onUpdateStore,
   onDeleteStore,
+  onReplayTour,
 }) => {
   const lang: UILanguage = 'en';
   const [storeName, setStoreName] = useState('');
@@ -191,16 +194,27 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     <div className="space-y-6">
       {/* Household Preferences */}
       <div className="rounded-3xl border border-stone-200 bg-white p-5 space-y-4 shadow-2xs">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-2xl bg-teal-50 text-teal-700 flex items-center justify-center">
-            <SlidersHorizontal className="w-5 h-5" />
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-teal-50 text-teal-700 flex items-center justify-center shrink-0">
+              <SlidersHorizontal className="w-5 h-5" />
+            </div>
+            <div>
+              <h2 className="font-bold text-stone-900">Household Preferences</h2>
+              <p className="text-xs text-stone-500">
+                Customize your shopping cadence, forecast radar window, and daily nutrition targets
+              </p>
+            </div>
           </div>
-          <div>
-            <h2 className="font-bold text-stone-900">Household Preferences</h2>
-            <p className="text-xs text-stone-500">
-              Customize your shopping cadence, forecast radar window, and daily nutrition targets
-            </p>
-          </div>
+
+          <button
+            type="button"
+            onClick={onReplayTour}
+            className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-teal-50 hover:bg-teal-100 border border-teal-200 text-teal-800 px-3.5 py-2 text-xs font-bold transition shrink-0"
+          >
+            <PlayCircle className="w-4 h-4" />
+            Replay Feature Tour
+          </button>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">

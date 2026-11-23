@@ -34,7 +34,7 @@ export const AuthGate: React.FC<AuthGateProps> = ({
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#FAF9F6] flex items-center justify-center p-4">
+      <div className="min-h-[100dvh] bg-[#FAF9F6] flex items-center justify-center p-4 safe-top safe-bottom">
         <div className="text-center space-y-3">
           <div className="w-12 h-12 rounded-2xl bg-teal-700 text-white font-bold flex items-center justify-center mx-auto shadow-sm">
             KF
@@ -49,7 +49,7 @@ export const AuthGate: React.FC<AuthGateProps> = ({
   }
 
   return (
-    <div className="min-h-screen bg-[#FAF9F6] flex items-center justify-center p-4">
+    <div className="min-h-[100dvh] bg-[#FAF9F6] flex items-center justify-center p-4 safe-top safe-bottom">
       <div className="w-full max-w-md rounded-3xl bg-white shadow-xl border border-stone-200 overflow-hidden">
         <div className="bg-gradient-to-br from-teal-800 via-teal-700 to-emerald-700 p-6 text-white">
           <div className="flex items-center gap-3 mb-3">

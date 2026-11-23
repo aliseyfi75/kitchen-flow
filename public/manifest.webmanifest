@@ -3,7 +3,9 @@
   "short_name": "KitchenFlow",
   "description": "Smart household food inventory, portion tracker, store-aware shopping planner, and protein-focused meal planner.",
   "start_url": "./",
+  "scope": "./",
   "display": "standalone",
+  "orientation": "portrait-primary",
   "background_color": "#FAF9F6",
   "theme_color": "#0F766E",
   "icons": [
@@ -11,6 +13,17 @@
       "src": "./icon.svg",
       "sizes": "any",
       "type": "image/svg+xml"
+    },
+    {
+      "src": "./apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png"
+    },
+    {
+      "src": "./icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
     }
   ]
 }

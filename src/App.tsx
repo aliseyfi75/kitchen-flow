@@ -20,8 +20,28 @@ import { MealPlannerView } from './components/MealPlannerView';
 import { SettingsView } from './components/SettingsView';
 import { AuthGate } from './components/AuthGate';
 import { ReceiptScanModal } from './components/ReceiptScanModal';
+import { FeatureTour, TOUR_STEPS } from './components/FeatureTour';
+import { createTourDemoState } from './data/tourDemoData';
 
 type TabId = 'kitchen' | 'shopping' | 'meals' | 'settings';
+
+const TOUR_SEEN_KEY = 'kitchenflow_tour_seen_v1';
+
+function hasSeenTour(): boolean {
+  try {
+    return localStorage.getItem(TOUR_SEEN_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+function markTourSeen(): void {
+  try {
+    localStorage.setItem(TOUR_SEEN_KEY, 'true');
+  } catch {
+    // ignore storage errors
+  }
+}
 
 export function App() {
   const auth = useSupabaseAuth();
@@ -37,12 +57,36 @@ export function App() {
   }, [auth.mode, auth.member]);
 
   const store = useKitchenStore(cloudContext);
-  const { state, toast, syncStatus } = store;
+  const { state: realState, toast, syncStatus } = store;
   const lang = 'en' as const;
-  const uiMode = state.settings.uiMode;
 
   const [activeTab, setActiveTab] = useState<TabId>('kitchen');
   const [showReceiptScanner, setShowReceiptScanner] = useState(false);
+
+  // Interactive Guided Tour (uses completely isolated in-memory sample data — never modifies real data)
+  const [tourStep, setTourStep] = useState<number | null>(null);
+  const tourState = useMemo(() => createTourDemoState(), [tourStep !== null]);
+
+  const isAuthenticatedOrLocal =
+    auth.mode === 'local_demo' || (!auth.loading && Boolean(auth.session) && Boolean(auth.member));
+
+  // Auto-start tour once for first-time users right after signing in
+  useEffect(() => {
+    if (isAuthenticatedOrLocal && !hasSeenTour()) {
+      setTourStep(0);
+    }
+  }, [isAuthenticatedOrLocal]);
+
+  // Keep active tab synced with the current tour step and scroll gently to top
+  useEffect(() => {
+    if (tourStep !== null) {
+      const def = TOUR_STEPS[tourStep];
+      if (def) {
+        setActiveTab(def.tab);
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }
+    }
+  }, [tourStep]);
 
   useEffect(() => {
     document.documentElement.dir = 'ltr';
@@ -61,9 +105,27 @@ export function App() {
     );
   }
 
-  const activeDisplayName = auth.member?.displayName || state.settings.activeUser;
+  const isTourActive = tourStep !== null;
+  const activeState = isTourActive ? tourState : realState;
+  const uiMode = isTourActive ? TOUR_STEPS[tourStep].uiMode : realState.settings.uiMode;
+  const activeDisplayName = auth.member?.displayName || realState.settings.activeUser;
 
-  const essentialShoppingCount = state.shoppingList.filter(
+  const startTour = () => {
+    setTourStep(0);
+  };
+
+  const finishTour = () => {
+    markTourSeen();
+    setTourStep(null);
+    setActiveTab('kitchen');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const tourReadOnlyNotice = () => {
+    store.notify('You are viewing sample tour data — exit the tour to edit your real kitchen.', 'amber');
+  };
+
+  const essentialShoppingCount = activeState.shoppingList.filter(
     (s) => s.priority === 'essential' && !s.checked
   ).length;
 
@@ -80,21 +142,25 @@ export function App() {
   ];
 
   return (
-    <div className="min-h-screen bg-[#FAF9F6] text-stone-900 pb-24 lg:pb-10">
-      {/* Top Header */}
-      <header className="sticky top-0 z-30 bg-[#FAF9F6]/90 backdrop-blur-md border-b border-stone-200/80">
-        <div className="max-w-5xl mx-auto px-3 sm:px-4 h-16 flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2.5 min-w-0">
-            <div className="w-9 h-9 rounded-xl bg-teal-700 text-white flex items-center justify-center shadow-xs font-bold shrink-0">
+    <div
+      className={`min-h-[100dvh] bg-[#FAF9F6] text-stone-900 ${
+        isTourActive ? 'pb-72 lg:pb-16' : 'pb-[calc(5.5rem+env(safe-area-inset-bottom,0px))] lg:pb-10'
+      }`}
+    >
+      {/* Top Header with iPhone Notch / Dynamic Island Safe-Area Support */}
+      <header className="sticky top-0 z-30 bg-[#FAF9F6]/92 backdrop-blur-md border-b border-stone-200/80 safe-top">
+        <div className="max-w-5xl mx-auto safe-x h-14 sm:h-16 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-teal-700 text-white flex items-center justify-center shadow-xs font-bold text-xs sm:text-sm shrink-0">
               KF
             </div>
-            <div className="min-w-0 flex items-center gap-2">
-              <h1 className="font-bold text-base sm:text-lg tracking-tight text-stone-900 whitespace-nowrap">
+            <div className="min-w-0 flex items-center gap-1.5 sm:gap-2">
+              <h1 className="font-bold text-sm sm:text-lg tracking-tight text-stone-900 whitespace-nowrap">
                 {t(lang, 'appName')}
               </h1>
               {auth.mode === 'cloud' && (
                 <span
-                  className={`hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                  className={`inline-flex items-center gap-1 px-1.5 sm:px-2 py-0.5 rounded-full text-[10px] font-bold ${
                     syncStatus === 'synced'
                       ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                       : syncStatus === 'saving' || syncStatus === 'loading'
@@ -110,11 +176,13 @@ export function App() {
                   ) : (
                     <Loader2 className="w-3 h-3 animate-spin" />
                   )}
-                  {syncStatus === 'synced'
-                    ? 'Synced'
-                    : syncStatus === 'offline'
-                    ? 'Offline'
-                    : 'Syncing'}
+                  <span className="hidden sm:inline">
+                    {syncStatus === 'synced'
+                      ? 'Synced'
+                      : syncStatus === 'offline'
+                      ? 'Offline'
+                      : 'Syncing'}
+                  </span>
                 </span>
               )}
             </div>
@@ -152,7 +220,7 @@ export function App() {
           </nav>
 
           {/* Header Controls: Simple / Detailed Toggle + Sign Out */}
-          <div className="flex items-center gap-1.5 shrink-0">
+          <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
             <div
               className="inline-flex items-center rounded-xl border border-stone-200 bg-white p-0.5 shadow-2xs"
               role="group"
@@ -160,28 +228,32 @@ export function App() {
             >
               <button
                 type="button"
-                onClick={() => store.updateSettings({ uiMode: 'simple' })}
-                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold transition whitespace-nowrap ${
+                onClick={() =>
+                  isTourActive ? tourReadOnlyNotice() : store.updateSettings({ uiMode: 'simple' })
+                }
+                className={`inline-flex items-center gap-1 px-2 sm:px-2.5 py-1 rounded-lg text-[11px] font-bold transition whitespace-nowrap ${
                   uiMode === 'simple'
                     ? 'bg-teal-700 text-white shadow-2xs'
                     : 'text-stone-500 hover:text-stone-800'
                 }`}
                 title="Simple mode — quick everyday logging"
               >
-                <Sparkles className="w-3 h-3" />
+                <Sparkles className="w-3 h-3 hidden xs:inline" />
                 {t(lang, 'simpleMode')}
               </button>
               <button
                 type="button"
-                onClick={() => store.updateSettings({ uiMode: 'detailed' })}
-                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold transition whitespace-nowrap ${
+                onClick={() =>
+                  isTourActive ? tourReadOnlyNotice() : store.updateSettings({ uiMode: 'detailed' })
+                }
+                className={`inline-flex items-center gap-1 px-2 sm:px-2.5 py-1 rounded-lg text-[11px] font-bold transition whitespace-nowrap ${
                   uiMode === 'detailed'
                     ? 'bg-stone-900 text-white shadow-2xs'
                     : 'text-stone-500 hover:text-stone-800'
                 }`}
                 title="Detailed mode — nutrition facts, micronutrients & label scanner"
               >
-                <Layers className="w-3 h-3" />
+                <Layers className="w-3 h-3 hidden xs:inline" />
                 {t(lang, 'detailedMode')}
               </button>
             </div>
@@ -190,8 +262,9 @@ export function App() {
               <button
                 type="button"
                 onClick={() => auth.signOut()}
-                className="inline-flex items-center gap-1.5 rounded-xl border border-stone-200 bg-white hover:bg-rose-50 hover:text-rose-700 hover:border-rose-200 px-2.5 py-1.5 text-xs font-semibold text-stone-700 transition"
+                className="inline-flex items-center gap-1.5 rounded-xl border border-stone-200 bg-white hover:bg-rose-50 hover:text-rose-700 hover:border-rose-200 px-2 sm:px-2.5 py-1.5 text-xs font-semibold text-stone-700 transition"
                 title={`Signed in as ${activeDisplayName} — Click to sign out`}
+                aria-label="Sign out"
               >
                 <LogOut className="w-3.5 h-3.5" />
                 <span className="hidden sm:inline">{activeDisplayName}</span>
@@ -201,94 +274,110 @@ export function App() {
         </div>
       </header>
 
+      {/* Interactive Feature Tour Banner & Floating Guide Card */}
+      {isTourActive && (
+        <FeatureTour
+          stepIndex={tourStep}
+          onChangeStep={setTourStep}
+          onFinish={finishTour}
+        />
+      )}
+
       {/* Main Content */}
-      <main className="max-w-5xl mx-auto px-4 py-5">
+      <main className="max-w-5xl mx-auto safe-x py-4 sm:py-5">
         {activeTab === 'kitchen' && (
           <KitchenView
-            items={state.items}
-            stores={state.stores}
-            shoppingList={state.shoppingList}
-            shoppingDay={state.settings.shoppingDay}
+            items={activeState.items}
+            stores={activeState.stores}
+            shoppingList={activeState.shoppingList}
+            shoppingDay={activeState.settings.shoppingDay}
             lang={lang}
             uiMode={uiMode}
-            eatingMode={state.settings.eatingMode}
-            guestCount={state.settings.guestCount}
+            eatingMode={activeState.settings.eatingMode}
+            guestCount={activeState.settings.guestCount}
             onChangeEatingMode={(eatingMode, guestCount) =>
-              store.updateSettings({
-                eatingMode,
-                ...(guestCount !== undefined ? { guestCount } : {}),
-              })
+              isTourActive
+                ? tourReadOnlyNotice()
+                : store.updateSettings({
+                    eatingMode,
+                    ...(guestCount !== undefined ? { guestCount } : {}),
+                  })
             }
-            onUsePortion={store.usePortion}
-            onSetLevel={store.setContinuousLevel}
-            onMarkFinished={store.markFinished}
-            onQuickRestock={store.quickRestock}
-            onAddToShoppingManually={store.addKitchenItemToShoppingManually}
-            onSaveItem={store.saveItem}
-            onDeleteItem={store.deleteItem}
-            onOpenReceiptScanner={() => setShowReceiptScanner(true)}
+            onUsePortion={isTourActive ? tourReadOnlyNotice : store.usePortion}
+            onSetLevel={isTourActive ? tourReadOnlyNotice : store.setContinuousLevel}
+            onMarkFinished={isTourActive ? tourReadOnlyNotice : store.markFinished}
+            onQuickRestock={isTourActive ? tourReadOnlyNotice : store.quickRestock}
+            onAddToShoppingManually={
+              isTourActive ? tourReadOnlyNotice : store.addKitchenItemToShoppingManually
+            }
+            onSaveItem={isTourActive ? tourReadOnlyNotice : store.saveItem}
+            onDeleteItem={isTourActive ? tourReadOnlyNotice : store.deleteItem}
+            onOpenReceiptScanner={() =>
+              isTourActive ? tourReadOnlyNotice() : setShowReceiptScanner(true)
+            }
           />
         )}
 
         {activeTab === 'shopping' && (
           <ShoppingView
-            items={state.items}
-            stores={state.stores}
-            shoppingList={state.shoppingList}
-            shoppingDay={state.settings.shoppingDay}
-            forecastHorizonDays={state.settings.forecastHorizonDays}
+            items={activeState.items}
+            stores={activeState.stores}
+            shoppingList={activeState.shoppingList}
+            shoppingDay={activeState.settings.shoppingDay}
+            forecastHorizonDays={activeState.settings.forecastHorizonDays}
             lang={lang}
             uiMode={uiMode}
-            onSyncForecast={store.syncForecastToShoppingList}
-            onAddShoppingItem={store.addShoppingItem}
-            onToggleChecked={store.toggleShoppingChecked}
-            onUpdateShoppingItem={store.updateShoppingItem}
-            onRemoveShoppingItem={store.removeShoppingItem}
-            onCompleteTrip={store.completeShoppingTrip}
+            onSyncForecast={isTourActive ? tourReadOnlyNotice : store.syncForecastToShoppingList}
+            onAddShoppingItem={isTourActive ? tourReadOnlyNotice : store.addShoppingItem}
+            onToggleChecked={isTourActive ? tourReadOnlyNotice : store.toggleShoppingChecked}
+            onUpdateShoppingItem={isTourActive ? tourReadOnlyNotice : store.updateShoppingItem}
+            onRemoveShoppingItem={isTourActive ? tourReadOnlyNotice : store.removeShoppingItem}
+            onCompleteTrip={isTourActive ? tourReadOnlyNotice : store.completeShoppingTrip}
           />
         )}
 
         {activeTab === 'meals' && (
           <MealPlannerView
-            items={state.items}
-            stores={state.stores}
-            recipes={state.recipes}
-            weeklyPlan={state.weeklyPlan}
-            cuisines={state.settings.cuisines}
-            defaultTools={state.settings.defaultTools}
-            dailyProteinTarget={state.settings.dailyProteinTarget}
-            dailySugarLimit={state.settings.dailySugarLimit}
-            shoppingDay={state.settings.shoppingDay}
+            items={activeState.items}
+            stores={activeState.stores}
+            recipes={activeState.recipes}
+            weeklyPlan={activeState.weeklyPlan}
+            cuisines={activeState.settings.cuisines}
+            defaultTools={activeState.settings.defaultTools}
+            dailyProteinTarget={activeState.settings.dailyProteinTarget}
+            dailySugarLimit={activeState.settings.dailySugarLimit}
+            shoppingDay={activeState.settings.shoppingDay}
             lang={lang}
             uiMode={uiMode}
-            onSetWeeklyPlan={store.setWeeklyPlan}
-            onUpdateMealServings={store.updatePlannedMealServings}
-            onMarkMealCooked={store.markMealCooked}
-            onCookRecipeDirect={store.cookRecipeDirect}
-            onAddRecipe={store.addRecipe}
-            onAddCuisine={store.addCuisine}
-            onToggleFavorite={store.toggleFavoriteRecipe}
-            onAddMissingToShopping={store.addShoppingItem}
+            onSetWeeklyPlan={isTourActive ? tourReadOnlyNotice : store.setWeeklyPlan}
+            onUpdateMealServings={isTourActive ? tourReadOnlyNotice : store.updatePlannedMealServings}
+            onMarkMealCooked={isTourActive ? tourReadOnlyNotice : store.markMealCooked}
+            onCookRecipeDirect={isTourActive ? tourReadOnlyNotice : store.cookRecipeDirect}
+            onAddRecipe={isTourActive ? tourReadOnlyNotice : store.addRecipe}
+            onAddCuisine={isTourActive ? tourReadOnlyNotice : store.addCuisine}
+            onToggleFavorite={isTourActive ? tourReadOnlyNotice : store.toggleFavoriteRecipe}
+            onAddMissingToShopping={isTourActive ? tourReadOnlyNotice : store.addShoppingItem}
           />
         )}
 
         {activeTab === 'settings' && (
           <SettingsView
-            items={state.items}
-            stores={state.stores}
-            settings={state.settings}
-            onUpdateSettings={store.updateSettings}
-            onUpdateItemLearning={store.updateItemLearning}
-            onAddStore={store.addStore}
-            onUpdateStore={store.updateStore}
-            onDeleteStore={store.deleteStore}
+            items={activeState.items}
+            stores={activeState.stores}
+            settings={activeState.settings}
+            onUpdateSettings={isTourActive ? tourReadOnlyNotice : store.updateSettings}
+            onUpdateItemLearning={isTourActive ? tourReadOnlyNotice : store.updateItemLearning}
+            onAddStore={isTourActive ? tourReadOnlyNotice : store.addStore}
+            onUpdateStore={isTourActive ? tourReadOnlyNotice : store.updateStore}
+            onDeleteStore={isTourActive ? tourReadOnlyNotice : store.deleteStore}
+            onReplayTour={startTour}
           />
         )}
       </main>
 
       {/* Toast Notification */}
       {toast && (
-        <div className="fixed bottom-20 lg:bottom-6 left-1/2 -translate-x-1/2 z-50 px-4 w-full max-w-md pointer-events-none">
+        <div className="fixed bottom-[calc(4.75rem+env(safe-area-inset-bottom,0px))] lg:bottom-6 left-1/2 -translate-x-1/2 z-50 px-4 w-full max-w-md pointer-events-none">
           <div
             className={`rounded-2xl px-4 py-3 text-xs sm:text-sm font-semibold text-white shadow-xl text-center ${
               toast.tone === 'amber'
@@ -303,7 +392,7 @@ export function App() {
         </div>
       )}
 
-      {/* Mobile & Tablet Bottom Tab Navigation */}
+      {/* Mobile & Tablet Bottom Tab Navigation with Home Indicator Safe-Area */}
       <nav className="lg:hidden fixed bottom-0 inset-x-0 z-30 bg-white/95 backdrop-blur-md border-t border-stone-200 safe-bottom">
         <div className="grid grid-cols-4 h-16">
           {navItems.map((item) => {
@@ -313,7 +402,7 @@ export function App() {
                 key={item.id}
                 type="button"
                 onClick={() => setActiveTab(item.id)}
-                className={`relative flex flex-col items-center justify-center gap-1 text-[11px] font-semibold transition ${
+                className={`relative flex flex-col items-center justify-center gap-1 text-[11px] font-semibold transition active:scale-95 ${
                   active ? 'text-teal-700' : 'text-stone-500'
                 }`}
               >
@@ -334,8 +423,8 @@ export function App() {
 
       {showReceiptScanner && (
         <ReceiptScanModal
-          items={state.items}
-          stores={state.stores}
+          items={realState.items}
+          stores={realState.stores}
           lang={lang}
           onClose={() => setShowReceiptScanner(false)}
           onApplyReceipt={store.applyReceiptItems}

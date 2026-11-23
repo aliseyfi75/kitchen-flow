@@ -4,11 +4,25 @@
   html {
     font-family: 'Inter', 'Vazirmatn', system-ui, -apple-system, sans-serif;
     -webkit-tap-highlight-color: transparent;
+    -webkit-text-size-adjust: 100%;
+    overflow-x: clip;
   }
 
   body {
     background-color: #FAF9F6;
     color: #1C1917;
+    overflow-x: clip;
+    overscroll-behavior-y: none;
+    min-height: 100dvh;
+  }
+
+  /* Prevent iOS Safari / Home Screen PWA auto-zoom when tapping inputs or selects */
+  @media (max-width: 640px) {
+    input:not([type='checkbox']):not([type='radio']):not([type='color']),
+    select,
+    textarea {
+      font-size: 16px !important;
+    }
   }
 }
 
@@ -31,6 +45,16 @@
   background: #A8A29E;
 }
 
+/* Safe-area utilities for notched phones & Home Screen standalone PWAs */
+.safe-top {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
 .safe-bottom {
   padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.safe-x {
+  padding-left: max(0.75rem, env(safe-area-inset-left, 0px));
+  padding-right: max(0.75rem, env(safe-area-inset-right, 0px));
 }

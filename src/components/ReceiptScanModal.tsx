@@ -95,7 +95,7 @@ export const ReceiptScanModal: React.FC<ReceiptScanModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-stone-950/55 backdrop-blur-xs p-0 sm:p-4">
-      <div className="w-full max-w-2xl max-h-[92vh] flex flex-col rounded-t-3xl sm:rounded-3xl bg-white shadow-2xl border border-stone-200 overflow-hidden">
+      <div className="w-full max-w-2xl max-h-[92dvh] flex flex-col rounded-t-3xl sm:rounded-3xl bg-white shadow-2xl border border-stone-200 overflow-hidden safe-bottom">
         {/* Header */}
         <div className="px-5 py-4 bg-gradient-to-r from-teal-800 to-emerald-700 text-white flex items-center justify-between gap-3 shrink-0">
           <div className="flex items-center gap-3">
