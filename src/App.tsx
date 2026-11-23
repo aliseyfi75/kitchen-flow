@@ -5,7 +5,6 @@ import {
   CloudOff,
   Layers,
   Loader2,
-  Lock,
   LogOut,
   Refrigerator,
   Settings,
@@ -19,7 +18,6 @@ import { KitchenView } from './components/KitchenView';
 import { ShoppingView } from './components/ShoppingView';
 import { MealPlannerView } from './components/MealPlannerView';
 import { SettingsView } from './components/SettingsView';
-import { LoginGateModal } from './components/LoginGateModal';
 import { AuthGate } from './components/AuthGate';
 import { ReceiptScanModal } from './components/ReceiptScanModal';
 
@@ -44,7 +42,6 @@ export function App() {
   const uiMode = state.settings.uiMode;
 
   const [activeTab, setActiveTab] = useState<TabId>('kitchen');
-  const [showLoginPreview, setShowLoginPreview] = useState(false);
   const [showReceiptScanner, setShowReceiptScanner] = useState(false);
 
   useEffect(() => {
@@ -52,7 +49,6 @@ export function App() {
     document.documentElement.lang = 'en';
   }, []);
 
-  // When Supabase is configured, strictly gate the entire app behind 2-user private login!
   if (auth.mode === 'cloud' && (auth.loading || !auth.session || !auth.member)) {
     return (
       <AuthGate
@@ -155,7 +151,7 @@ export function App() {
             })}
           </nav>
 
-          {/* Header Controls: Simple / Detailed Toggle + Account */}
+          {/* Header Controls: Simple / Detailed Toggle + Sign Out */}
           <div className="flex items-center gap-1.5 shrink-0">
             <div
               className="inline-flex items-center rounded-xl border border-stone-200 bg-white p-0.5 shadow-2xs"
@@ -170,7 +166,7 @@ export function App() {
                     ? 'bg-teal-700 text-white shadow-2xs'
                     : 'text-stone-500 hover:text-stone-800'
                 }`}
-                title="Simple mode — quick everyday logging, zero clutter"
+                title="Simple mode — quick everyday logging"
               >
                 <Sparkles className="w-3 h-3" />
                 {t(lang, 'simpleMode')}
@@ -183,14 +179,14 @@ export function App() {
                     ? 'bg-stone-900 text-white shadow-2xs'
                     : 'text-stone-500 hover:text-stone-800'
                 }`}
-                title="Detailed mode — nutrition facts, micronutrients, label scanner & analytics"
+                title="Detailed mode — nutrition facts, micronutrients & label scanner"
               >
                 <Layers className="w-3 h-3" />
                 {t(lang, 'detailedMode')}
               </button>
             </div>
 
-            {auth.mode === 'cloud' ? (
+            {auth.mode === 'cloud' && (
               <button
                 type="button"
                 onClick={() => auth.signOut()}
@@ -198,16 +194,6 @@ export function App() {
                 title={`Signed in as ${activeDisplayName} — Click to sign out`}
               >
                 <LogOut className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">{activeDisplayName}</span>
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={() => setShowLoginPreview(true)}
-                className="inline-flex items-center gap-1.5 rounded-xl border border-stone-200 bg-white hover:bg-stone-50 px-2.5 py-1.5 text-xs font-semibold text-stone-700"
-                title="Preview 2-user private login gate"
-              >
-                <Lock className="w-3.5 h-3.5 text-teal-700" />
                 <span className="hidden sm:inline">{activeDisplayName}</span>
               </button>
             )}
@@ -296,8 +282,6 @@ export function App() {
             onAddStore={store.addStore}
             onUpdateStore={store.updateStore}
             onDeleteStore={store.deleteStore}
-            onResetDemo={store.resetDemo}
-            onOpenLoginPreview={() => setShowLoginPreview(true)}
           />
         )}
       </main>
@@ -347,16 +331,6 @@ export function App() {
           })}
         </div>
       </nav>
-
-      {showLoginPreview && (
-        <LoginGateModal
-          onClose={() => setShowLoginPreview(false)}
-          onSelectDemoUser={(user) => {
-            store.updateSettings({ activeUser: user });
-            store.notify(`Signed in as ${user} (Local Demo)`, 'teal');
-          }}
-        />
-      )}
 
       {showReceiptScanner && (
         <ReceiptScanModal

@@ -1,14 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Activity,
-  Lock,
   Plus,
-  RotateCcw,
   Search,
-  ShieldCheck,
+  SlidersHorizontal,
   Store as StoreIcon,
   Trash2,
-  Users,
 } from 'lucide-react';
 import { HouseholdSettings, InventoryItem, Store, UILanguage } from '../types/kitchen';
 import { computeItemForecast, formatShoppingDayName } from '../utils/forecasting';
@@ -26,8 +23,6 @@ interface SettingsViewProps {
   onAddStore: (store: Omit<Store, 'id'>) => void;
   onUpdateStore: (storeId: string, patch: Partial<Omit<Store, 'id'>>) => void;
   onDeleteStore: (storeId: string) => void;
-  onResetDemo: () => void;
-  onOpenLoginPreview: () => void;
 }
 
 const LearnedRhythmRow: React.FC<{
@@ -92,9 +87,7 @@ const LearnedRhythmRow: React.FC<{
             onChange={(e) => setCycleDraft(e.target.value)}
             onBlur={commitCycle}
             onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.currentTarget.blur();
-              }
+              if (e.key === 'Enter') e.currentTarget.blur();
             }}
             aria-label={`Learned cycle days for ${item.name}`}
             className="w-16 rounded-lg border border-stone-200 bg-white px-2 py-1 text-xs font-semibold text-stone-800 focus:outline-none focus:ring-2 focus:ring-teal-500"
@@ -114,9 +107,7 @@ const LearnedRhythmRow: React.FC<{
             onChange={(e) => setRateDraft(e.target.value)}
             onBlur={commitRate}
             onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.currentTarget.blur();
-              }
+              if (e.key === 'Enter') e.currentTarget.blur();
             }}
             aria-label={`Burn rate for ${item.name}`}
             className="w-16 rounded-lg border border-stone-200 bg-white px-2 py-1 text-xs font-semibold text-teal-800 focus:outline-none focus:ring-2 focus:ring-teal-500"
@@ -170,10 +161,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   onAddStore,
   onUpdateStore,
   onDeleteStore,
-  onResetDemo,
-  onOpenLoginPreview,
 }) => {
-  const lang: UILanguage = settings.language;
+  const lang: UILanguage = 'en';
   const [storeName, setStoreName] = useState('');
   const [storeAlias, setStoreAlias] = useState('');
   const [storeColor, setStoreColor] = useState(STORE_COLORS[0]);
@@ -183,9 +172,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const filteredRhythmItems = useMemo(() => {
     const q = rhythmSearch.trim().toLowerCase();
     if (!q) return items;
-    return items.filter((i) =>
-      `${i.name} ${i.alias}`.toLowerCase().includes(q)
-    );
+    return items.filter((i) => `${i.name} ${i.alias}`.toLowerCase().includes(q));
   }, [items, rhythmSearch]);
 
   const handleAddStore = (e: React.FormEvent) => {
@@ -202,63 +189,30 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
   return (
     <div className="space-y-6">
-      {/* Household Profile & Private Auth Preview */}
+      {/* Household Preferences */}
       <div className="rounded-3xl border border-stone-200 bg-white p-5 space-y-4 shadow-2xs">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-teal-50 text-teal-700 flex items-center justify-center">
-              <Users className="w-5 h-5" />
-            </div>
-            <div>
-              <h2 className="font-bold text-stone-900">Household & Sync Settings</h2>
-              <p className="text-xs text-stone-500">
-                Phase 1 runs locally in your browser • Phase 2 connects Supabase Auth + Realtime Sync
-              </p>
-            </div>
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-2xl bg-teal-50 text-teal-700 flex items-center justify-center">
+            <SlidersHorizontal className="w-5 h-5" />
           </div>
-
-          <button
-            type="button"
-            onClick={onOpenLoginPreview}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-stone-900 hover:bg-stone-800 text-white px-3.5 py-2 text-xs font-semibold shrink-0"
-          >
-            <Lock className="w-3.5 h-3.5" />
-            Preview 2-User Login Gate
-          </button>
+          <div>
+            <h2 className="font-bold text-stone-900">Household Preferences</h2>
+            <p className="text-xs text-stone-500">
+              Customize your shopping cadence, forecast radar window, and daily nutrition targets
+            </p>
+          </div>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
-          <div className="rounded-2xl bg-stone-50 border border-stone-200/80 p-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+          <div className="rounded-2xl bg-stone-50 border border-stone-200/80 p-3.5">
             <label className="block text-[11px] font-semibold text-stone-500 mb-1.5">
-              Active User (Demo Switcher)
+              Shopping Day &amp; Forecast Radar Window
             </label>
-            <div className="grid grid-cols-2 gap-1.5">
-              {(['Ali', 'Keemia'] as const).map((user) => (
-                <button
-                  key={user}
-                  type="button"
-                  onClick={() => onUpdateSettings({ activeUser: user })}
-                  className={`py-1.5 rounded-lg text-xs font-semibold transition ${
-                    settings.activeUser === user
-                      ? 'bg-teal-700 text-white shadow-2xs'
-                      : 'bg-white text-stone-600 border border-stone-200'
-                  }`}
-                >
-                  {user}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="rounded-2xl bg-stone-50 border border-stone-200/80 p-3">
-            <label className="block text-[11px] font-semibold text-stone-500 mb-1.5">
-              Shopping Day &amp; Radar Horizon
-            </label>
-            <div className="grid grid-cols-2 gap-1.5">
+            <div className="grid grid-cols-2 gap-2">
               <select
                 value={settings.shoppingDay}
                 onChange={(e) => onUpdateSettings({ shoppingDay: Number(e.target.value) })}
-                className="w-full rounded-lg border border-stone-200 bg-white px-2 py-1.5 text-xs font-semibold"
+                className="w-full rounded-lg border border-stone-200 bg-white px-2.5 py-2 text-xs font-semibold"
               >
                 {[6, 0, 5, 1, 2, 3, 4].map((d) => (
                   <option key={d} value={d}>
@@ -278,55 +232,57 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     })
                   }
                   title="Consumption Forecast Radar horizon (days)"
-                  className="w-full rounded-lg border border-stone-200 bg-white px-2 pr-7 py-1.5 text-xs font-bold text-amber-800"
+                  className="w-full rounded-lg border border-stone-200 bg-white px-2.5 pr-11 py-2 text-xs font-bold text-amber-800"
                 />
-                <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-semibold text-stone-400">
-                  d
+                <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] font-semibold text-stone-400">
+                  days
                 </span>
               </div>
             </div>
           </div>
 
-          <div className="rounded-2xl bg-stone-50 border border-stone-200/80 p-3">
+          <div className="rounded-2xl bg-stone-50 border border-stone-200/80 p-3.5">
             <label className="block text-[11px] font-semibold text-stone-500 mb-1.5">
-              Protein Goal / Sugar Limit (g)
+              Daily Protein Goal / Sugar Limit (g per person)
             </label>
-            <div className="grid grid-cols-2 gap-1.5">
-              <input
-                type="number"
-                min={60}
-                max={250}
-                step={5}
-                value={settings.dailyProteinTarget}
-                onChange={(e) =>
-                  onUpdateSettings({ dailyProteinTarget: Math.max(60, Number(e.target.value) || 120) })
-                }
-                title="Daily protein goal (g)"
-                className="w-full rounded-lg border border-stone-200 bg-white px-2 py-1.5 text-xs font-bold text-indigo-700"
-              />
-              <input
-                type="number"
-                min={10}
-                max={100}
-                step={2}
-                value={settings.dailySugarLimit}
-                onChange={(e) =>
-                  onUpdateSettings({ dailySugarLimit: Math.max(10, Number(e.target.value) || 36) })
-                }
-                title="Daily sugar limit (g)"
-                className="w-full rounded-lg border border-stone-200 bg-white px-2 py-1.5 text-xs font-bold text-rose-700"
-              />
+            <div className="grid grid-cols-2 gap-2">
+              <div className="relative">
+                <input
+                  type="number"
+                  min={60}
+                  max={250}
+                  step={5}
+                  value={settings.dailyProteinTarget}
+                  onChange={(e) =>
+                    onUpdateSettings({
+                      dailyProteinTarget: Math.max(60, Number(e.target.value) || 120),
+                    })
+                  }
+                  className="w-full rounded-lg border border-stone-200 bg-white px-2.5 pr-14 py-2 text-xs font-bold text-indigo-700"
+                />
+                <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] font-semibold text-stone-400">
+                  g pro
+                </span>
+              </div>
+              <div className="relative">
+                <input
+                  type="number"
+                  min={10}
+                  max={100}
+                  step={2}
+                  value={settings.dailySugarLimit}
+                  onChange={(e) =>
+                    onUpdateSettings({
+                      dailySugarLimit: Math.max(10, Number(e.target.value) || 36),
+                    })
+                  }
+                  className="w-full rounded-lg border border-stone-200 bg-white px-2.5 pr-16 py-2 text-xs font-bold text-rose-700"
+                />
+                <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] font-semibold text-stone-400">
+                  g sugar
+                </span>
+              </div>
             </div>
-          </div>
-        </div>
-
-        <div className="rounded-2xl bg-teal-50/70 border border-teal-100 p-3.5 flex items-start gap-2.5 text-xs text-teal-900">
-          <ShieldCheck className="w-4 h-4 text-teal-700 shrink-0 mt-0.5" />
-          <div>
-            <span className="font-bold">Public Repo, Private Household Data:</span> Even though{' '}
-            <code className="bg-white/80 px-1.5 py-0.5 rounded">kitchen-flow</code> is public for GitHub
-            Pages, Phase 2 locks Supabase Postgres with Row Level Security exclusively to your two email
-            accounts, and stores your Gemini API key server-side in a Supabase Edge Function.
           </div>
         </div>
       </div>
@@ -342,17 +298,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           {stores.map((st) => {
             const picking = editingColorStoreId === st.id;
             return (
-              <div
-                key={st.id}
-                className="rounded-2xl border border-stone-200 p-3 space-y-2.5"
-              >
+              <div key={st.id} className="rounded-2xl border border-stone-200 p-3 space-y-2.5">
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2.5 min-w-0">
                     <button
                       type="button"
-                      onClick={() =>
-                        setEditingColorStoreId(picking ? null : st.id)
-                      }
+                      onClick={() => setEditingColorStoreId(picking ? null : st.id)}
                       className="w-5 h-5 rounded-full shrink-0 ring-2 ring-offset-2 ring-stone-200 hover:ring-stone-400 transition cursor-pointer"
                       style={{ backgroundColor: st.color }}
                       title="Click to change store color"
@@ -469,54 +420,50 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               Edit cycle days, daily burn rate, or preferred store inline — everything stays synced automatically.
             </p>
           </div>
-          <div className="relative sm:w-56">
-            <Search className="w-3.5 h-3.5 text-stone-400 absolute top-1/2 -translate-y-1/2 left-2.5 pointer-events-none" />
-            <input
-              dir="auto"
-              value={rhythmSearch}
-              onChange={(e) => setRhythmSearch(e.target.value)}
-              placeholder="Filter items..."
-              className="w-full rounded-xl border border-stone-200 pl-8 pr-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-teal-500"
-            />
+          {items.length > 0 && (
+            <div className="relative sm:w-56">
+              <Search className="w-3.5 h-3.5 text-stone-400 absolute top-1/2 -translate-y-1/2 left-2.5 pointer-events-none" />
+              <input
+                dir="auto"
+                value={rhythmSearch}
+                onChange={(e) => setRhythmSearch(e.target.value)}
+                placeholder="Filter items..."
+                className="w-full rounded-xl border border-stone-200 pl-8 pr-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-teal-500"
+              />
+            </div>
+          )}
+        </div>
+
+        {items.length === 0 ? (
+          <div className="rounded-2xl border border-dashed border-stone-200 p-8 text-center text-xs text-stone-500">
+            No items tracked yet. Add items or scan a receipt on the Kitchen tab to start tracking consumption cycles.
           </div>
-        </div>
-
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs">
-            <thead>
-              <tr className="border-b border-stone-100 text-stone-500">
-                <th className="py-2 pr-3 font-semibold">Item</th>
-                <th className="py-2 px-2 font-semibold">Learned Cycle</th>
-                <th className="py-2 px-2 font-semibold">Burn Rate</th>
-                <th className="py-2 px-2 font-semibold">Learned Store</th>
-                <th className="py-2 pl-3 font-semibold text-right">Est. Left</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-stone-100">
-              {filteredRhythmItems.map((item) => (
-                <LearnedRhythmRow
-                  key={item.id}
-                  item={item}
-                  stores={stores}
-                  shoppingDay={settings.shoppingDay}
-                  onUpdate={(patch) => onUpdateItemLearning(item.id, patch)}
-                />
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* Reset Demo */}
-      <div className="flex justify-end">
-        <button
-          type="button"
-          onClick={onResetDemo}
-          className="inline-flex items-center gap-1.5 rounded-xl border border-stone-200 bg-white hover:bg-rose-50 hover:text-rose-700 hover:border-rose-200 px-4 py-2 text-xs font-semibold text-stone-600 transition"
-        >
-          <RotateCcw className="w-3.5 h-3.5" />
-          {t(lang, 'resetDemo')}
-        </button>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead>
+                <tr className="border-b border-stone-100 text-stone-500">
+                  <th className="py-2 pr-3 font-semibold">Item</th>
+                  <th className="py-2 px-2 font-semibold">Learned Cycle</th>
+                  <th className="py-2 px-2 font-semibold">Burn Rate</th>
+                  <th className="py-2 px-2 font-semibold">Learned Store</th>
+                  <th className="py-2 pl-3 font-semibold text-right">Est. Left</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-stone-100">
+                {filteredRhythmItems.map((item) => (
+                  <LearnedRhythmRow
+                    key={item.id}
+                    item={item}
+                    stores={stores}
+                    shoppingDay={settings.shoppingDay}
+                    onUpdate={(patch) => onUpdateItemLearning(item.id, patch)}
+                  />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </div>
   );

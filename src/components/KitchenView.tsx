@@ -281,8 +281,15 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
 
       {/* Inventory Cards Grid */}
       {filtered.length === 0 ? (
-        <div className="rounded-2xl border border-dashed border-stone-300 bg-white p-10 text-center text-sm text-stone-500">
-          No matching items found. Try clearing your filter or add a new item.
+        <div className="rounded-3xl border border-dashed border-stone-300 bg-white p-10 text-center space-y-2">
+          <div className="text-sm font-semibold text-stone-800">
+            {items.length === 0 ? 'Your kitchen is clean and ready!' : 'No matching items found.'}
+          </div>
+          <p className="text-xs text-stone-500">
+            {items.length === 0
+              ? 'Tap "+ Add Item" to scan a barcode or enter an item, or tap "Scan Receipt" after a shopping trip.'
+              : 'Try clearing your search or switching storage zones.'}
+          </p>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">

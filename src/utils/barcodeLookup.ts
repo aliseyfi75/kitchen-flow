@@ -156,9 +156,3 @@ export async function lookupBarcodeFromOpenFoodFacts(
     };
   }
 }
-
-export const SAMPLE_BARCODES = [
-  { code: '0056800099112', label: 'Oikos Greek Yogurt' },
-  { code: '0068200201650', label: 'Natrel Milk' },
-  { code: '0096619756803', label: 'Kirkland Olive Oil' },
-];

@@ -6,7 +6,6 @@ import {
   CheckCircle2,
   Loader2,
   Search,
-  Sparkles,
   Trash2,
   X,
 } from 'lucide-react';
@@ -20,9 +19,7 @@ import {
   UILanguage,
 } from '../types/kitchen';
 import { CATEGORY_META, ZONE_META } from '../i18n/translations';
-import { simulateNutritionLabelScan } from '../utils/scannerSimulation';
-import { lookupBarcodeFromOpenFoodFacts, SAMPLE_BARCODES } from '../utils/barcodeLookup';
-import { isSupabaseConfigured } from '../services/supabaseClient';
+import { lookupBarcodeFromOpenFoodFacts } from '../utils/barcodeLookup';
 import { scanNutritionLabelWithGemini } from '../services/geminiEdge';
 
 interface ItemModalProps {
@@ -238,38 +235,18 @@ export const ItemModal: React.FC<ItemModalProps> = ({
     setScanSuccessMsg(null);
     setBarcodeError(null);
 
-    if (isSupabaseConfigured) {
-      try {
-        const scanned = await scanNutritionLabelWithGemini(file, name || alias || 'food item');
-        applyScannedNutrition(scanned);
-        setScanSuccessMsg(
-          'Nutrition Facts extracted live via Gemini Vision! Review any field below and tap Save.'
-        );
-        setIsScanningLabel(false);
-        return;
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : 'Edge function unavailable';
-        setBarcodeError(
-          `Live Gemini label scan unavailable (${msg}). Loaded sample values so you can edit manually.`
-        );
-      }
+    try {
+      const scanned = await scanNutritionLabelWithGemini(file, name || alias || 'food item');
+      applyScannedNutrition(scanned);
+      setScanSuccessMsg(
+        'Nutrition Facts extracted from label! Review any field below and tap Save.'
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Label scan failed';
+      setBarcodeError(`Could not read label automatically (${msg}). You can enter values below.`);
+    } finally {
+      setIsScanningLabel(false);
     }
-
-    window.setTimeout(() => {
-      applyScannedNutrition(simulateNutritionLabelScan(name || alias || 'packaged item'));
-      setScanSuccessMsg('Nutrition Facts table extracted! Review any field below and tap Save.');
-      setIsScanningLabel(false);
-    }, 500);
-  };
-
-  const handleDemoLabelScan = () => {
-    setIsScanningLabel(true);
-    setScanSuccessMsg(null);
-    window.setTimeout(() => {
-      applyScannedNutrition(simulateNutritionLabelScan(name || alias || 'packaged item'));
-      setScanSuccessMsg('Nutrition Facts table extracted! Review any field below and tap Save.');
-      setIsScanningLabel(false);
-    }, 400);
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -457,24 +434,6 @@ export const ItemModal: React.FC<ItemModalProps> = ({
                     'Lookup'
                   )}
                 </button>
-              </div>
-
-              {/* Instant Sample Live Barcodes */}
-              <div className="flex items-center justify-center flex-wrap gap-1.5 pt-1">
-                <span className="text-[11px] font-semibold text-stone-500">Test live UPC:</span>
-                {SAMPLE_BARCODES.map((sb) => (
-                  <button
-                    key={sb.code}
-                    type="button"
-                    onClick={() => {
-                      setBarcodeInput(sb.code);
-                      runBarcodeLookup(sb.code, true);
-                    }}
-                    className="px-2.5 py-1 rounded-lg bg-white border border-indigo-200 hover:border-indigo-400 text-[11px] font-semibold text-indigo-900 shadow-2xs"
-                  >
-                    {sb.label}
-                  </button>
-                ))}
               </div>
             </div>
 
@@ -800,14 +759,6 @@ export const ItemModal: React.FC<ItemModalProps> = ({
                     >
                       <Camera className="w-3.5 h-3.5" />
                       Upload / Take Label Photo
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleDemoLabelScan}
-                      className="inline-flex items-center gap-1.5 rounded-xl bg-white border border-teal-200 text-teal-900 px-3 py-2 text-xs font-semibold"
-                    >
-                      <Sparkles className="w-3.5 h-3.5 text-teal-600" />
-                      Try Sample Label Scan
                     </button>
                   </div>
                   {isScanningLabel && (

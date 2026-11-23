@@ -1,16 +1,11 @@
 import { KitchenState } from '../types/kitchen';
-import { createSeedState } from '../data/seedData';
+import { createCleanState, stripLegacyDemoData } from '../data/seedData';
 
-const STORAGE_KEY = 'kitchenflow_state_v3';
+const STORAGE_KEY = 'kitchenflow_prod_v1';
 
-/**
- * Repository abstraction so Phase 2 can swap LocalStorageKitchenRepository
- * with SupabaseKitchenRepository (Postgres + Realtime + RLS) cleanly.
- */
 export interface KitchenRepository {
   load(): KitchenState;
   save(state: KitchenState): void;
-  reset(): KitchenState;
 }
 
 export class LocalStorageKitchenRepository implements KitchenRepository {
@@ -18,18 +13,17 @@ export class LocalStorageKitchenRepository implements KitchenRepository {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (!raw) {
-        const seed = createSeedState();
-        this.save(seed);
-        return seed;
+        const fresh = createCleanState();
+        this.save(fresh);
+        return fresh;
       }
       const parsed = JSON.parse(raw) as KitchenState;
-      const defaults = createSeedState();
+      const defaults = createCleanState();
       if (!parsed.items || !parsed.stores || !parsed.settings) {
         this.save(defaults);
         return defaults;
       }
-      // Graceful forward-compatibility merge for new settings/fields
-      return {
+      const merged: KitchenState = {
         ...defaults,
         ...parsed,
         settings: {
@@ -42,10 +36,11 @@ export class LocalStorageKitchenRepository implements KitchenRepository {
           servings: m.servings ?? (m.slot === 'lunch' ? 1 : 2),
         })),
       };
+      return stripLegacyDemoData(merged).cleaned;
     } catch {
-      const seed = createSeedState();
-      this.save(seed);
-      return seed;
+      const fresh = createCleanState();
+      this.save(fresh);
+      return fresh;
     }
   }
 
@@ -55,12 +50,6 @@ export class LocalStorageKitchenRepository implements KitchenRepository {
     } catch {
       // Ignore quota errors in private browsing
     }
-  }
-
-  reset(): KitchenState {
-    const seed = createSeedState();
-    this.save(seed);
-    return seed;
   }
 }
 

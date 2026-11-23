@@ -5,7 +5,6 @@ import {
   ChevronDown,
   ChevronUp,
   Clock,
-  Code2,
   Flame,
   Heart,
   PackageCheck,
@@ -35,12 +34,10 @@ import {
 import { EFFORT_META, t, TOOL_META, ZONE_META } from '../i18n/translations';
 import { computeItemForecast } from '../utils/forecasting';
 import {
-  buildGeminiPromptPreview,
   estimateRecipeNutrition,
   generateSmartWeeklyPlan,
   scoreRecipeAgainstInventory,
 } from '../utils/mealEngine';
-import { isSupabaseConfigured } from '../services/supabaseClient';
 import { generateMealsWithGemini } from '../services/geminiEdge';
 
 interface MealPlannerViewProps {
@@ -122,7 +119,6 @@ export const MealPlannerView: React.FC<MealPlannerViewProps> = ({
   const [cuisineFilter, setCuisineFilter] = useState<string>('all');
   const [ingredientPrefs, setIngredientPrefs] = useState<Record<string, 'must' | 'exclude'>>({});
   const [expandedRecipeId, setExpandedRecipeId] = useState<string | null>(null);
-  const [showAiPayload, setShowAiPayload] = useState(false);
   const [isCallingGemini, setIsCallingGemini] = useState(false);
   const [geminiNotice, setGeminiNotice] = useState<string | null>(null);
 
@@ -269,20 +265,12 @@ export const MealPlannerView: React.FC<MealPlannerViewProps> = ({
   };
 
   const handleGenerateWithGemini = async () => {
-    if (!isSupabaseConfigured) {
-      setGeminiNotice(
-        'Connect Supabase + deploy the gemini-assistant Edge Function (see supabase/SETUP.md) to generate fresh AI meals with your private Gemini key. Using your local smart planner for now!'
-      );
-      handleGeneratePlan();
-      return;
-    }
-
     setIsCallingGemini(true);
     setGeminiNotice(null);
     try {
       const aiRecipes = await generateMealsWithGemini(items, request);
       if (aiRecipes.length === 0) {
-        setGeminiNotice('Gemini returned no recipes — falling back to your household library.');
+        setGeminiNotice('No new meal ideas returned — try adding a few items to your Kitchen first.');
         handleGeneratePlan();
         return;
       }
@@ -295,7 +283,6 @@ export const MealPlannerView: React.FC<MealPlannerViewProps> = ({
         createdIds.push({ id, recipe: r });
       }
 
-      // Immediately schedule newly returned AI meals (or combine with existing library)
       const latestRecipes: MealRecipe[] = [
         ...createdIds.map(({ id, recipe }) => ({ ...recipe, id })),
         ...recipes,
@@ -305,13 +292,13 @@ export const MealPlannerView: React.FC<MealPlannerViewProps> = ({
           {
             id: `plan-ai-single-${Date.now()}`,
             dayIndex: 0,
-            dayLabel: 'Next Meal (Gemini AI)',
+            dayLabel: 'Next Meal',
             slot: 'dinner',
             recipeId: latestRecipes[0].id,
             servings: 2,
             cooked: false,
             source: 'ai_suggested',
-            reasonNote: createdIds[0].recipe.reasonNote || 'Suggested live by Gemini AI',
+            reasonNote: createdIds[0].recipe.reasonNote || 'Suggested by Gemini AI',
           },
         ]);
       } else {
@@ -324,11 +311,11 @@ export const MealPlannerView: React.FC<MealPlannerViewProps> = ({
           }))
         );
       }
-      setGeminiNotice(`Generated ${aiRecipes.length} fresh meal idea(s) live via Gemini AI!`);
+      setGeminiNotice(`Generated ${aiRecipes.length} meal idea(s) with Gemini AI!`);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Gemini Edge Function error';
-      setGeminiNotice(`Live Gemini AI unavailable (${msg}). Built plan from your library instead.`);
-      handleGeneratePlan();
+      const msg = err instanceof Error ? err.message : 'Could not reach Gemini AI';
+      setGeminiNotice(`Gemini AI unavailable (${msg}).`);
+      if (recipes.length > 0) handleGeneratePlan();
     } finally {
       setIsCallingGemini(false);
     }
@@ -651,22 +638,11 @@ export const MealPlannerView: React.FC<MealPlannerViewProps> = ({
 
         {/* Action Buttons */}
         <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-stone-100">
-          {isDetailed ? (
-            <button
-              type="button"
-              onClick={() => setShowAiPayload((v) => !v)}
-              className="inline-flex items-center gap-1.5 text-xs font-semibold text-indigo-700 hover:text-indigo-900"
-            >
-              <Code2 className="w-4 h-4" />
-              {showAiPayload ? 'Hide Gemini Edge Payload' : 'Inspect Phase 2 Gemini Payload'}
-            </button>
-          ) : (
-            <span className="text-xs text-stone-400">
-              {days === 0
-                ? 'Suggests the best single meal right now from your stock'
-                : 'Lunch defaults to Solo (1×) • Dinner to Together (2×)'}
-            </span>
-          )}
+          <span className="text-xs text-stone-400">
+            {days === 0
+              ? 'Suggests the best single meal right now from your stock'
+              : 'Lunch defaults to Solo (1×) • Dinner to Together (2×)'}
+          </span>
 
           <div className="flex items-center flex-wrap gap-2">
             <button
@@ -692,15 +668,6 @@ export const MealPlannerView: React.FC<MealPlannerViewProps> = ({
         {geminiNotice && (
           <div className="rounded-xl bg-indigo-50 border border-indigo-200 px-3.5 py-2.5 text-xs text-indigo-900">
             {geminiNotice}
-          </div>
-        )}
-
-        {isDetailed && showAiPayload && (
-          <div className="rounded-2xl bg-stone-950 text-teal-200 p-4 text-[11px] font-mono overflow-x-auto max-h-64">
-            <div className="text-stone-400 mb-2 font-sans text-xs">
-              In Phase 2, this authenticated payload goes to your Supabase Edge Function (Gemini API key stays encrypted server-side):
-            </div>
-            <pre>{buildGeminiPromptPreview(items, request)}</pre>
           </div>
         )}
       </div>

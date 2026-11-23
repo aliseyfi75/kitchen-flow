@@ -13,7 +13,7 @@ import {
 } from '../types/kitchen';
 import { kitchenRepo } from '../services/storage';
 import { supabase } from '../services/supabaseClient';
-import { createSeedState } from '../data/seedData';
+import { createCleanState, stripLegacyDemoData } from '../data/seedData';
 import { computeItemForecast, getLearnedStoreId, updateEmaCycleDays } from '../utils/forecasting';
 
 export interface ToastMessage {
@@ -32,7 +32,7 @@ export interface CloudSyncContext {
 const CLIENT_INSTANCE_ID = Math.random().toString(36).slice(2, 10);
 
 function mergeRemoteState(remote: Partial<KitchenState>): KitchenState {
-  const defaults = createSeedState();
+  const defaults = createCleanState();
   return {
     ...defaults,
     ...remote,
@@ -166,11 +166,25 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
       }
 
       if (data?.state) {
-        lastCloudUpdatedAtRef.current = data.updated_at || '';
+        const merged = mergeRemoteState(data.state as Partial<KitchenState>);
+        const { cleaned, changed } = stripLegacyDemoData(merged);
+        if (changed) {
+          // One-time cleanup of legacy prototype demo data in cloud
+          const nowIso = new Date().toISOString();
+          await supabase!.from('household_state').upsert({
+            household_id: householdId,
+            state: cleaned,
+            updated_at: nowIso,
+            updated_by: actorTag,
+          });
+          lastCloudUpdatedAtRef.current = nowIso;
+        } else {
+          lastCloudUpdatedAtRef.current = data.updated_at || '';
+        }
         skipNextCloudSaveRef.current = true;
-        setState(mergeRemoteState(data.state as Partial<KitchenState>));
+        setState(cleaned);
       } else {
-        // First time ever for this household: seed initial state to cloud
+        // First time ever for this household: initialize clean empty state in cloud
         const nowIso = new Date().toISOString();
         await supabase!.from('household_state').upsert({
           household_id: householdId,
@@ -1151,12 +1165,6 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
     }));
   }, []);
 
-  const resetDemo = useCallback(() => {
-    const fresh = kitchenRepo.reset();
-    setState(fresh);
-    notify('Reset to fresh sample household data', 'teal');
-  }, [notify]);
-
   return {
     state,
     toast,
@@ -1187,7 +1195,6 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
     updatePlannedMealServings,
     markMealCooked,
     updateSettings,
-    resetDemo,
     notify,
   };
 }

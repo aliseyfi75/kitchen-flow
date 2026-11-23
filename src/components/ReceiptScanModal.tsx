@@ -18,12 +18,6 @@ import {
   Store,
   UILanguage,
 } from '../types/kitchen';
-import {
-  buildParsedReceiptItems,
-  SAMPLE_RECEIPTS,
-  SampleReceipt,
-} from '../utils/scannerSimulation';
-import { isSupabaseConfigured } from '../services/supabaseClient';
 import { scanReceiptWithGemini } from '../services/geminiEdge';
 import { ZONE_META } from '../i18n/translations';
 
@@ -48,18 +42,7 @@ export const ReceiptScanModal: React.FC<ReceiptScanModalProps> = ({
   const [detectedStoreId, setDetectedStoreId] = useState<string>(stores[0]?.id ?? 'store-costco');
   const [parsedLines, setParsedLines] = useState<ReceiptParsedItem[]>([]);
   const [activeReceiptTitle, setActiveReceiptTitle] = useState<string>('');
-  const [scanNotice, setScanNotice] = useState<string | null>(null);
-
-  const runSampleReceipt = (sample: SampleReceipt) => {
-    setIsScanning(true);
-    setScanNotice(null);
-    setActiveReceiptTitle(`${sample.label} (${sample.totalLabel})`);
-    setDetectedStoreId(sample.storeId);
-    window.setTimeout(() => {
-      setParsedLines(buildParsedReceiptItems(sample, items));
-      setIsScanning(false);
-    }, 450);
-  };
+  const [scanError, setScanError] = useState<string | null>(null);
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -67,35 +50,22 @@ export const ReceiptScanModal: React.FC<ReceiptScanModalProps> = ({
     const url = URL.createObjectURL(file);
     setImagePreviewUrl(url);
     setIsScanning(true);
-    setScanNotice(null);
-    setActiveReceiptTitle(`Uploaded photo: ${file.name}`);
+    setScanError(null);
+    setActiveReceiptTitle(file.name);
 
-    if (isSupabaseConfigured) {
-      try {
-        const result = await scanReceiptWithGemini(file, stores, items);
-        setDetectedStoreId(result.detectedStoreId);
-        setParsedLines(result.items);
-        setScanNotice(
-          result.items.length > 0
-            ? `Parsed ${result.items.length} item(s) live via Gemini Vision!`
-            : 'No grocery lines detected — you can add lines manually below.'
-        );
-        setIsScanning(false);
-        return;
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : 'Gemini Vision unavailable';
-        setScanNotice(
-          `Live AI scan unavailable (${msg}). Showing editable sample lines — deploy the gemini-assistant Edge Function (see supabase/SETUP.md) for live receipt OCR.`
-        );
+    try {
+      const result = await scanReceiptWithGemini(file, stores, items);
+      setDetectedStoreId(result.detectedStoreId);
+      setParsedLines(result.items);
+      if (result.items.length === 0) {
+        setScanError('No grocery lines detected on this photo. You can add items manually below.');
       }
-    }
-
-    window.setTimeout(() => {
-      const sample = SAMPLE_RECEIPTS[0];
-      setDetectedStoreId(sample.storeId);
-      setParsedLines(buildParsedReceiptItems(sample, items));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Could not scan receipt';
+      setScanError(`Could not parse receipt automatically (${msg}). You can add lines manually below.`);
+    } finally {
       setIsScanning(false);
-    }, 550);
+    }
   };
 
   const updateLine = (id: string, patch: Partial<ReceiptParsedItem>) => {
@@ -133,9 +103,9 @@ export const ReceiptScanModal: React.FC<ReceiptScanModalProps> = ({
               <Receipt className="w-5 h-5" />
             </div>
             <div>
-              <h2 className="text-base sm:text-lg font-bold">Quick Receipt Scanner</h2>
+              <h2 className="text-base sm:text-lg font-bold">Scan Grocery Receipt</h2>
               <p className="text-xs text-teal-100">
-                Snap your receipt → auto-match kitchen items & restock in 1 tap
+                Snap your receipt → auto-match kitchen items &amp; restock in 1 tap
               </p>
             </div>
           </div>
@@ -151,52 +121,31 @@ export const ReceiptScanModal: React.FC<ReceiptScanModalProps> = ({
         {/* Body */}
         <div className="flex-1 overflow-y-auto p-5 space-y-5">
           {/* Upload / Camera Capture Box */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/*"
-              capture="environment"
-              onChange={handleFileChange}
-              className="hidden"
-            />
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            capture="environment"
+            onChange={handleFileChange}
+            className="hidden"
+          />
 
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              className="rounded-2xl border-2 border-dashed border-teal-300 bg-teal-50/50 hover:bg-teal-50 p-4 text-left transition flex items-center gap-3.5"
-            >
-              <div className="w-11 h-11 rounded-2xl bg-teal-700 text-white flex items-center justify-center shrink-0">
-                <Camera className="w-5 h-5" />
-              </div>
-              <div>
-                <div className="text-sm font-bold text-teal-950">Take Photo / Upload Receipt</div>
-                <div className="text-xs text-teal-800/80 mt-0.5 flex items-center gap-1">
-                  <Upload className="w-3 h-3" />
-                  Camera on phone or image file
-                </div>
-              </div>
-            </button>
-
-            <div className="rounded-2xl border border-stone-200 bg-stone-50 p-3.5 space-y-2">
-              <div className="text-[11px] font-bold uppercase tracking-wider text-stone-500 flex items-center gap-1">
-                <Sparkles className="w-3.5 h-3.5 text-teal-600" />
-                Try Instant Sample Receipts
-              </div>
-              <div className="flex flex-wrap gap-1.5">
-                {SAMPLE_RECEIPTS.map((sample) => (
-                  <button
-                    key={sample.id}
-                    type="button"
-                    onClick={() => runSampleReceipt(sample)}
-                    className="px-2.5 py-1.5 rounded-xl bg-white border border-stone-200 hover:border-teal-500 hover:text-teal-800 text-xs font-semibold text-stone-700 shadow-2xs transition"
-                  >
-                    {sample.storeName} ({sample.rawLines.length})
-                  </button>
-                ))}
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            className="w-full rounded-2xl border-2 border-dashed border-teal-300 bg-teal-50/50 hover:bg-teal-50 p-5 text-left transition flex items-center gap-4"
+          >
+            <div className="w-12 h-12 rounded-2xl bg-teal-700 text-white flex items-center justify-center shrink-0">
+              <Camera className="w-6 h-6" />
+            </div>
+            <div>
+              <div className="text-sm font-bold text-teal-950">Take Photo or Upload Receipt</div>
+              <div className="text-xs text-teal-800/80 mt-0.5 flex items-center gap-1">
+                <Upload className="w-3.5 h-3.5" />
+                Auto-detects store, matches existing staples &amp; adds bilingual aliases
               </div>
             </div>
-          </div>
+          </button>
 
           {/* Photo preview if uploaded */}
           {imagePreviewUrl && (
@@ -211,20 +160,14 @@ export const ReceiptScanModal: React.FC<ReceiptScanModalProps> = ({
                   <FileImage className="w-4 h-4 text-teal-700" />
                   {activeReceiptTitle}
                 </div>
-                <p>
-                  {scanNotice ? (
-                    scanNotice
-                  ) : isSupabaseConfigured ? (
-                    'Receipt photo analyzed via your private Supabase Gemini Edge Function.'
-                  ) : (
-                    <>
-                      <strong>Local Demo Mode:</strong> Showing sample extracted lines so you can test the
-                      review &amp; restock flow. Once Supabase + Gemini Edge Function are connected, your
-                      actual receipt photo is parsed automatically.
-                    </>
-                  )}
-                </p>
+                <p>Review or adjust any quantities and storage zones below before saving.</p>
               </div>
+            </div>
+          )}
+
+          {scanError && (
+            <div className="rounded-2xl bg-amber-50 border border-amber-200 px-3.5 py-2.5 text-xs text-amber-900">
+              {scanError}
             </div>
           )}
 
@@ -233,21 +176,21 @@ export const ReceiptScanModal: React.FC<ReceiptScanModalProps> = ({
             <div className="rounded-2xl border border-teal-100 bg-teal-50/40 p-8 text-center space-y-2">
               <Sparkles className="w-7 h-7 text-teal-700 mx-auto animate-pulse" />
               <div className="text-sm font-bold text-teal-900">
-                Reading receipt & matching your kitchen staples...
+                Reading receipt &amp; matching your kitchen staples...
               </div>
               <div className="text-xs text-teal-700">
-                Detecting store, portion templates, and Persian/English aliases
+                Detecting store, portion sizes, and bilingual aliases
               </div>
             </div>
           )}
 
           {/* Parsed Items Review */}
-          {!isScanning && parsedLines.length > 0 && (
+          {!isScanning && (parsedLines.length > 0 || imagePreviewUrl) && (
             <div className="space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-2 pb-1 border-b border-stone-100">
                 <div className="flex items-center gap-2">
                   <span className="text-xs font-bold uppercase tracking-wider text-stone-500">
-                    Detected Store:
+                    Store:
                   </span>
                   <select
                     value={detectedStoreId}
@@ -282,58 +225,56 @@ export const ReceiptScanModal: React.FC<ReceiptScanModalProps> = ({
                         : 'border-stone-100 bg-stone-50 opacity-55'
                     }`}
                   >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex items-start gap-2.5 min-w-0 flex-1">
-                        <button
-                          type="button"
-                          onClick={() => updateLine(line.id, { included: !line.included })}
-                          className={`mt-0.5 w-5 h-5 rounded-md border flex items-center justify-center shrink-0 ${
-                            line.included
-                              ? 'bg-teal-600 border-teal-600 text-white'
-                              : 'border-stone-300 bg-white'
-                          }`}
-                        >
-                          {line.included && <Check className="w-3.5 h-3.5 stroke-[3]" />}
-                        </button>
+                    <div className="flex items-start gap-2.5 min-w-0">
+                      <button
+                        type="button"
+                        onClick={() => updateLine(line.id, { included: !line.included })}
+                        className={`mt-0.5 w-5 h-5 rounded-md border flex items-center justify-center shrink-0 ${
+                          line.included
+                            ? 'bg-teal-600 border-teal-600 text-white'
+                            : 'border-stone-300 bg-white'
+                        }`}
+                      >
+                        {line.included && <Check className="w-3.5 h-3.5 stroke-[3]" />}
+                      </button>
 
-                        <div className="min-w-0 flex-1 space-y-1.5">
-                          <div className="flex items-center flex-wrap gap-1.5">
-                            <span className="font-mono text-[10px] text-stone-400 bg-stone-100 px-1.5 py-0.5 rounded">
-                              {line.rawReceiptText}
+                      <div className="min-w-0 flex-1 space-y-1.5">
+                        <div className="flex items-center flex-wrap gap-1.5">
+                          <span className="font-mono text-[10px] text-stone-400 bg-stone-100 px-1.5 py-0.5 rounded">
+                            {line.rawReceiptText}
+                          </span>
+                          {line.matchedItemId ? (
+                            <span className="inline-flex items-center gap-1 text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 px-1.5 py-0.5 rounded-full">
+                              <CheckCircle2 className="w-3 h-3" />
+                              Matched existing
                             </span>
-                            {line.matchedItemId ? (
-                              <span className="inline-flex items-center gap-1 text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 px-1.5 py-0.5 rounded-full">
-                                <CheckCircle2 className="w-3 h-3" />
-                                Matched existing
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center gap-1 text-[10px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 px-1.5 py-0.5 rounded-full">
-                                New item
-                              </span>
-                            )}
-                            {line.price !== undefined && (
-                              <span className="text-[11px] font-semibold text-stone-500">
-                                ${line.price.toFixed(2)}
-                              </span>
-                            )}
-                          </div>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 text-[10px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 px-1.5 py-0.5 rounded-full">
+                              New item
+                            </span>
+                          )}
+                          {line.price !== undefined && (
+                            <span className="text-[11px] font-semibold text-stone-500">
+                              ${line.price.toFixed(2)}
+                            </span>
+                          )}
+                        </div>
 
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                            <input
-                              dir="auto"
-                              value={line.name}
-                              onChange={(e) => updateLine(line.id, { name: e.target.value })}
-                              placeholder="Item name"
-                              className="rounded-lg border border-stone-200 px-2.5 py-1.5 text-xs font-semibold text-stone-900"
-                            />
-                            <input
-                              dir="auto"
-                              value={line.alias}
-                              onChange={(e) => updateLine(line.id, { alias: e.target.value })}
-                              placeholder="Persian / secondary alias"
-                              className="rounded-lg border border-stone-200 px-2.5 py-1.5 text-xs text-teal-800"
-                            />
-                          </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          <input
+                            dir="auto"
+                            value={line.name}
+                            onChange={(e) => updateLine(line.id, { name: e.target.value })}
+                            placeholder="Item name"
+                            className="rounded-lg border border-stone-200 px-2.5 py-1.5 text-xs font-semibold text-stone-900"
+                          />
+                          <input
+                            dir="auto"
+                            value={line.alias}
+                            onChange={(e) => updateLine(line.id, { alias: e.target.value })}
+                            placeholder="Persian / secondary alias"
+                            className="rounded-lg border border-stone-200 px-2.5 py-1.5 text-xs text-teal-800"
+                          />
                         </div>
                       </div>
                     </div>
@@ -396,8 +337,8 @@ export const ReceiptScanModal: React.FC<ReceiptScanModalProps> = ({
         <div className="px-5 py-3.5 border-t border-stone-100 bg-stone-50/80 flex items-center justify-between gap-3 shrink-0">
           <div className="text-xs text-stone-500">
             {selectedCount > 0
-              ? `Updates inventory, learns store affinity & clears matching shopping items.`
-              : 'Pick a sample receipt or upload a photo to begin.'}
+              ? 'Updates inventory, learns store affinity & clears matching shopping items.'
+              : 'Upload a receipt photo to extract items.'}
           </div>
           <div className="flex items-center gap-2 shrink-0">
             <button
@@ -420,7 +361,7 @@ export const ReceiptScanModal: React.FC<ReceiptScanModalProps> = ({
               className="inline-flex items-center gap-1.5 rounded-xl bg-teal-700 hover:bg-teal-800 disabled:opacity-40 text-white px-4 py-2 text-xs font-bold shadow-xs transition"
             >
               <PackageCheck className="w-4 h-4" />
-              Confirm & Restock ({selectedCount})
+              Confirm &amp; Restock ({selectedCount})
             </button>
           </div>
         </div>
