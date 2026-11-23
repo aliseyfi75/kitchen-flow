@@ -15,37 +15,53 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-const GEMINI_MODEL = 'gemini-2.5-flash';
+// Cost-optimized model ladder:
+// Always try the cheapest / highest free-tier quota model first (gemini-2.5-flash-lite),
+// and only fall back to gemini-2.5-flash if Flash-Lite fails or hits quota.
+const MODEL_LADDER = ['gemini-2.5-flash-lite', 'gemini-2.5-flash'];
 
 async function callGemini(apiKey: string, parts: unknown[], systemInstruction: string) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(
-    apiKey
-  )}`;
+  let lastError: Error | null = null;
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: systemInstruction }] },
-      contents: [{ role: 'user', parts }],
-      generationConfig: {
-        temperature: 0.4,
-        responseMimeType: 'application/json',
-      },
-    }),
-  });
+  for (const model of MODEL_LADDER) {
+    try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(
+        apiKey
+      )}`;
 
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`Gemini API error (${response.status}): ${errText.slice(0, 300)}`);
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: systemInstruction }] },
+          contents: [{ role: 'user', parts }],
+          generationConfig: {
+            temperature: 0.35,
+            maxOutputTokens: 2048,
+            responseMimeType: 'application/json',
+          },
+        }),
+      });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        lastError = new Error(`Gemini (${model}) error ${response.status}: ${errText.slice(0, 220)}`);
+        continue;
+      }
+
+      const data = await response.json();
+      const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!rawText) {
+        lastError = new Error(`Gemini (${model}) returned an empty response`);
+        continue;
+      }
+      return JSON.parse(rawText);
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+    }
   }
 
-  const data = await response.json();
-  const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!rawText) {
-    throw new Error('Gemini returned an empty response');
-  }
-  return JSON.parse(rawText);
+  throw lastError || new Error('All Gemini models failed');
 }
 
 Deno.serve(async (req: Request) => {
