@@ -318,10 +318,12 @@ export function App() {
               isTourActive ? tourReadOnlyNotice : store.addKitchenItemToShoppingManually
             }
             onSaveItem={isTourActive ? tourReadOnlyNotice : store.saveItem}
+            onAddItemsBatch={isTourActive ? tourReadOnlyNotice : store.addItemsBatch}
             onDeleteItem={isTourActive ? tourReadOnlyNotice : store.deleteItem}
             onOpenReceiptScanner={() =>
               isTourActive ? tourReadOnlyNotice() : setShowReceiptScanner(true)
             }
+            onOpenShoppingTab={() => setActiveTab('shopping')}
           />
         )}
 

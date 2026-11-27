@@ -770,6 +770,33 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
     [notify]
   );
 
+  const addItemsBatch = useCallback(
+    (newItems: InventoryItem[]) => {
+      if (newItems.length === 0) return;
+      const snapshot = stateRef.current;
+      const nowIso = new Date().toISOString();
+      const stamped = newItems.map((it) => ({ ...it, updatedAt: nowIso }));
+      const addedIds = stamped.map((it) => it.id);
+
+      setState((prev) => ({
+        ...prev,
+        items: [...stamped, ...prev.items],
+        syncMeta: clearTombstones(prev.syncMeta, addedIds),
+      }));
+
+      notify(`Added ${stamped.length} staple(s) to your Kitchen!`, 'teal', {
+        onUndo: () => {
+          setState({
+            ...snapshot,
+            syncMeta: recordTombstones(snapshot.syncMeta, addedIds, new Date().toISOString()),
+          });
+          notify('Undid starter staples', 'amber');
+        },
+      });
+    },
+    [notify]
+  );
+
   const deleteItem = useCallback(
     (itemId: string) => {
       const snapshot = stateRef.current;
@@ -1657,6 +1684,7 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
     markFinished,
     quickRestock,
     saveItem,
+    addItemsBatch,
     deleteItem,
     updateItemLearning,
     syncForecastToShoppingList,
