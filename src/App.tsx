@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useMemo, useState } from 'react';
 import {
   ChefHat,
   Cloud,
@@ -15,13 +15,22 @@ import { useSupabaseAuth } from './hooks/useSupabaseAuth';
 import { useKitchenStore } from './hooks/useKitchenStore';
 import { UI_LABELS } from './i18n/translations';
 import { KitchenView } from './components/KitchenView';
-import { ShoppingView } from './components/ShoppingView';
-import { MealPlannerView } from './components/MealPlannerView';
-import { SettingsView } from './components/SettingsView';
 import { AuthGate } from './components/AuthGate';
-import { ReceiptScanModal } from './components/ReceiptScanModal';
 import { FeatureTour, TOUR_STEPS } from './components/FeatureTour';
 import { createTourDemoState } from './data/tourDemoData';
+
+const ShoppingView = lazy(() =>
+  import('./components/ShoppingView').then((m) => ({ default: m.ShoppingView }))
+);
+const MealPlannerView = lazy(() =>
+  import('./components/MealPlannerView').then((m) => ({ default: m.MealPlannerView }))
+);
+const SettingsView = lazy(() =>
+  import('./components/SettingsView').then((m) => ({ default: m.SettingsView }))
+);
+const ReceiptScanModal = lazy(() =>
+  import('./components/ReceiptScanModal').then((m) => ({ default: m.ReceiptScanModal }))
+);
 
 type TabId = 'kitchen' | 'shopping' | 'meals' | 'settings';
 
@@ -316,62 +325,71 @@ export function App() {
           />
         )}
 
-        {activeTab === 'shopping' && (
-          <ShoppingView
-            items={activeState.items}
-            stores={activeState.stores}
-            shoppingList={activeState.shoppingList}
-            shoppingDay={activeState.settings.shoppingDay}
-            forecastHorizonDays={activeState.settings.forecastHorizonDays}
-            uiMode={uiMode}
-            onSyncForecast={isTourActive ? tourReadOnlyNotice : store.syncForecastToShoppingList}
-            onAddShoppingItem={isTourActive ? tourReadOnlyNotice : store.addShoppingItem}
-            onToggleChecked={isTourActive ? tourReadOnlyNotice : store.toggleShoppingChecked}
-            onUpdateShoppingItem={isTourActive ? tourReadOnlyNotice : store.updateShoppingItem}
-            onRemoveShoppingItem={isTourActive ? tourReadOnlyNotice : store.removeShoppingItem}
-            onCompleteTrip={isTourActive ? tourReadOnlyNotice : store.completeShoppingTrip}
-            onNotify={store.notify}
-          />
-        )}
+        <Suspense
+          fallback={
+            <div className="py-16 flex items-center justify-center text-stone-400 text-xs font-semibold gap-2">
+              <Loader2 className="w-4 h-4 animate-spin text-teal-700" />
+              Loading view...
+            </div>
+          }
+        >
+          {activeTab === 'shopping' && (
+            <ShoppingView
+              items={activeState.items}
+              stores={activeState.stores}
+              shoppingList={activeState.shoppingList}
+              shoppingDay={activeState.settings.shoppingDay}
+              forecastHorizonDays={activeState.settings.forecastHorizonDays}
+              uiMode={uiMode}
+              onSyncForecast={isTourActive ? tourReadOnlyNotice : store.syncForecastToShoppingList}
+              onAddShoppingItem={isTourActive ? tourReadOnlyNotice : store.addShoppingItem}
+              onToggleChecked={isTourActive ? tourReadOnlyNotice : store.toggleShoppingChecked}
+              onUpdateShoppingItem={isTourActive ? tourReadOnlyNotice : store.updateShoppingItem}
+              onRemoveShoppingItem={isTourActive ? tourReadOnlyNotice : store.removeShoppingItem}
+              onCompleteTrip={isTourActive ? tourReadOnlyNotice : store.completeShoppingTrip}
+              onNotify={store.notify}
+            />
+          )}
 
-        {activeTab === 'meals' && (
-          <MealPlannerView
-            items={activeState.items}
-            stores={activeState.stores}
-            recipes={activeState.recipes}
-            weeklyPlan={activeState.weeklyPlan}
-            cuisines={activeState.settings.cuisines}
-            defaultTools={activeState.settings.defaultTools}
-            dailyProteinTarget={activeState.settings.dailyProteinTarget}
-            dailySugarLimit={activeState.settings.dailySugarLimit}
-            shoppingDay={activeState.settings.shoppingDay}
-            uiMode={uiMode}
-            onSetWeeklyPlan={isTourActive ? tourReadOnlyNotice : store.setWeeklyPlan}
-            onUpdateMealServings={isTourActive ? tourReadOnlyNotice : store.updatePlannedMealServings}
-            onMarkMealCooked={isTourActive ? tourReadOnlyNotice : store.markMealCooked}
-            onCookRecipeDirect={isTourActive ? tourReadOnlyNotice : store.cookRecipeDirect}
-            onAddRecipe={isTourActive ? tourReadOnlyNotice : store.addRecipe}
-            onUpdateRecipe={isTourActive ? tourReadOnlyNotice : store.updateRecipe}
-            onDeleteRecipe={isTourActive ? tourReadOnlyNotice : store.deleteRecipe}
-            onAddCuisine={isTourActive ? tourReadOnlyNotice : store.addCuisine}
-            onToggleFavorite={isTourActive ? tourReadOnlyNotice : store.toggleFavoriteRecipe}
-            onAddMissingToShopping={isTourActive ? tourReadOnlyNotice : store.addShoppingItem}
-          />
-        )}
+          {activeTab === 'meals' && (
+            <MealPlannerView
+              items={activeState.items}
+              stores={activeState.stores}
+              recipes={activeState.recipes}
+              weeklyPlan={activeState.weeklyPlan}
+              cuisines={activeState.settings.cuisines}
+              defaultTools={activeState.settings.defaultTools}
+              dailyProteinTarget={activeState.settings.dailyProteinTarget}
+              dailySugarLimit={activeState.settings.dailySugarLimit}
+              shoppingDay={activeState.settings.shoppingDay}
+              uiMode={uiMode}
+              onSetWeeklyPlan={isTourActive ? tourReadOnlyNotice : store.setWeeklyPlan}
+              onUpdateMealServings={isTourActive ? tourReadOnlyNotice : store.updatePlannedMealServings}
+              onMarkMealCooked={isTourActive ? tourReadOnlyNotice : store.markMealCooked}
+              onCookRecipeDirect={isTourActive ? tourReadOnlyNotice : store.cookRecipeDirect}
+              onAddRecipe={isTourActive ? tourReadOnlyNotice : store.addRecipe}
+              onUpdateRecipe={isTourActive ? tourReadOnlyNotice : store.updateRecipe}
+              onDeleteRecipe={isTourActive ? tourReadOnlyNotice : store.deleteRecipe}
+              onAddCuisine={isTourActive ? tourReadOnlyNotice : store.addCuisine}
+              onToggleFavorite={isTourActive ? tourReadOnlyNotice : store.toggleFavoriteRecipe}
+              onAddMissingToShopping={isTourActive ? tourReadOnlyNotice : store.addShoppingItem}
+            />
+          )}
 
-        {activeTab === 'settings' && (
-          <SettingsView
-            items={activeState.items}
-            stores={activeState.stores}
-            settings={activeState.settings}
-            onUpdateSettings={isTourActive ? tourReadOnlyNotice : store.updateSettings}
-            onUpdateItemLearning={isTourActive ? tourReadOnlyNotice : store.updateItemLearning}
-            onAddStore={isTourActive ? tourReadOnlyNotice : store.addStore}
-            onUpdateStore={isTourActive ? tourReadOnlyNotice : store.updateStore}
-            onDeleteStore={isTourActive ? tourReadOnlyNotice : store.deleteStore}
-            onReplayTour={startTour}
-          />
-        )}
+          {activeTab === 'settings' && (
+            <SettingsView
+              items={activeState.items}
+              stores={activeState.stores}
+              settings={activeState.settings}
+              onUpdateSettings={isTourActive ? tourReadOnlyNotice : store.updateSettings}
+              onUpdateItemLearning={isTourActive ? tourReadOnlyNotice : store.updateItemLearning}
+              onAddStore={isTourActive ? tourReadOnlyNotice : store.addStore}
+              onUpdateStore={isTourActive ? tourReadOnlyNotice : store.updateStore}
+              onDeleteStore={isTourActive ? tourReadOnlyNotice : store.deleteStore}
+              onReplayTour={startTour}
+            />
+          )}
+        </Suspense>
       </main>
 
       {/* Toast Notification with Optional Undo Button */}
@@ -432,12 +450,14 @@ export function App() {
       </nav>
 
       {showReceiptScanner && (
-        <ReceiptScanModal
-          items={realState.items}
-          stores={realState.stores}
-          onClose={() => setShowReceiptScanner(false)}
-          onApplyReceipt={store.applyReceiptItems}
-        />
+        <Suspense fallback={null}>
+          <ReceiptScanModal
+            items={realState.items}
+            stores={realState.stores}
+            onClose={() => setShowReceiptScanner(false)}
+            onApplyReceipt={store.applyReceiptItems}
+          />
+        </Suspense>
       )}
     </div>
   );
