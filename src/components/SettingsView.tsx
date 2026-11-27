@@ -1,21 +1,30 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Activity,
+  ChevronDown,
+  ChevronRight,
   PlayCircle,
   Plus,
+  Receipt,
   Search,
   SlidersHorizontal,
   Store as StoreIcon,
   Trash2,
 } from 'lucide-react';
-import { HouseholdSettings, InventoryItem, Store } from '../types/kitchen';
+import { HouseholdSettings, InventoryItem, Store, TripReceipt } from '../types/kitchen';
 import { computeItemForecast, formatShoppingDayName } from '../utils/forecasting';
 import { UI_LABELS } from '../i18n/translations';
 import { formatItemStockSummary } from '../utils/inventoryDisplay';
+import {
+  computeMultiStorePriceComparisons,
+  computeStoreSpendSummary,
+  formatCurrency,
+} from '../utils/priceInsights';
 
 interface SettingsViewProps {
   items: InventoryItem[];
   stores: Store[];
+  tripReceipts?: TripReceipt[];
   settings: HouseholdSettings;
   onUpdateSettings: (patch: Partial<HouseholdSettings>) => void;
   onUpdateItemLearning: (
@@ -161,6 +170,7 @@ const STORE_COLORS = ['#DC2626', '#2563EB', '#0F766E', '#D97706', '#7C3AED', '#D
 export const SettingsView: React.FC<SettingsViewProps> = ({
   items,
   stores,
+  tripReceipts = [],
   settings,
   onUpdateSettings,
   onUpdateItemLearning,
@@ -175,6 +185,21 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [editingColorStoreId, setEditingColorStoreId] = useState<string | null>(null);
   const [confirmDeleteStoreId, setConfirmDeleteStoreId] = useState<string | null>(null);
   const [rhythmSearch, setRhythmSearch] = useState('');
+  const [spendExpanded, setSpendExpanded] = useState(false);
+
+  const spendSummary = useMemo(
+    () => computeStoreSpendSummary(tripReceipts, stores, 30),
+    [tripReceipts, stores]
+  );
+  const priceComparisons = useMemo(
+    () => computeMultiStorePriceComparisons(items, stores),
+    [items, stores]
+  );
+  const pricedItemsCount = useMemo(
+    () => items.filter((i) => typeof i.lastPrice === 'number' && i.lastPrice > 0).length,
+    [items]
+  );
+  const storeMap = useMemo(() => new Map(stores.map((s) => [s.id, s])), [stores]);
 
   const filteredRhythmItems = useMemo(() => {
     const q = rhythmSearch.trim().toLowerCase();
@@ -448,6 +473,182 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             Add Store
           </button>
         </form>
+      </div>
+
+      {/* Grocery Spend & Store Price Notes (Calm, Collapsed by Default) */}
+      <div className="rounded-3xl border border-stone-200 bg-white overflow-hidden shadow-2xs">
+        <button
+          type="button"
+          onClick={() => setSpendExpanded((v) => !v)}
+          className="w-full px-5 py-4 flex items-center justify-between gap-3 hover:bg-stone-50/80 transition text-left"
+        >
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-9 h-9 rounded-2xl bg-emerald-50 text-emerald-700 flex items-center justify-center shrink-0">
+              <Receipt className="w-4.5 h-4.5" />
+            </div>
+            <div className="min-w-0">
+              <h3 className="font-bold text-stone-900 text-sm">Grocery Spend &amp; Price Notes</h3>
+              <p className="text-[11px] text-stone-500 truncate">
+                {spendSummary.totalSpent > 0
+                  ? `${formatCurrency(spendSummary.totalSpent)} across ${spendSummary.tripCount} scanned trip(s) in last 30 days`
+                  : pricedItemsCount > 0
+                  ? `${pricedItemsCount} item(s) have saved prices for Shopping List estimates`
+                  : 'Scan receipts or add item prices to see store estimates & comparisons'}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            {spendSummary.totalSpent > 0 && (
+              <span className="hidden sm:inline-flex px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 text-xs font-bold">
+                30d: {formatCurrency(spendSummary.totalSpent)}
+              </span>
+            )}
+            {spendExpanded ? (
+              <ChevronDown className="w-4 h-4 text-stone-400" />
+            ) : (
+              <ChevronRight className="w-4 h-4 text-stone-400" />
+            )}
+          </div>
+        </button>
+
+        {spendExpanded && (
+          <div className="px-5 pb-5 pt-1 border-t border-stone-100 space-y-4">
+            {/* 30-Day Store Spend Breakdown */}
+            {spendSummary.byStore.length > 0 ? (
+              <div className="space-y-2.5">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-bold text-stone-700">Last 30 Days by Store</span>
+                  <span className="font-bold text-emerald-800">
+                    Total: {formatCurrency(spendSummary.totalSpent)}
+                  </span>
+                </div>
+                <div className="space-y-2">
+                  {spendSummary.byStore.map((st) => {
+                    const sharePct =
+                      spendSummary.totalSpent > 0
+                        ? Math.round((st.totalSpent / spendSummary.totalSpent) * 100)
+                        : 0;
+                    return (
+                      <div key={st.storeId} className="space-y-1">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="inline-flex items-center gap-1.5 font-semibold text-stone-800">
+                            <span
+                              className="w-2.5 h-2.5 rounded-full"
+                              style={{ backgroundColor: st.storeColor }}
+                            />
+                            {st.storeName}
+                            <span className="text-[11px] font-normal text-stone-400">
+                              ({st.tripCount} {st.tripCount === 1 ? 'trip' : 'trips'})
+                            </span>
+                          </span>
+                          <span className="font-bold text-stone-900">
+                            {formatCurrency(st.totalSpent)}{' '}
+                            <span className="text-[10px] font-medium text-stone-400">
+                              ({sharePct}%)
+                            </span>
+                          </span>
+                        </div>
+                        <div className="h-2 rounded-full bg-stone-100 overflow-hidden">
+                          <div
+                            className="h-full rounded-full"
+                            style={{
+                              width: `${Math.max(4, sharePct)}%`,
+                              backgroundColor: st.storeColor,
+                            }}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : (
+              <div className="rounded-2xl bg-stone-50 border border-dashed border-stone-200 p-4 text-xs text-stone-500">
+                No scanned receipts in the last 30 days yet. Scanning receipts in the Kitchen tab automatically tracks store totals and per-item prices.
+              </div>
+            )}
+
+            {/* Multi-Store Price Comparisons (only when an item has prices at 2+ stores) */}
+            {priceComparisons.length > 0 && (
+              <div className="space-y-2 pt-1">
+                <h4 className="text-xs font-bold text-stone-700">
+                  Store Price Comparisons ({priceComparisons.length})
+                </h4>
+                <div className="divide-y divide-stone-100 rounded-2xl border border-stone-200/80 overflow-hidden">
+                  {priceComparisons.slice(0, 8).map((cmp) => (
+                    <div
+                      key={cmp.itemId}
+                      className="px-3.5 py-2.5 bg-white flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs"
+                    >
+                      <div className="min-w-0">
+                        <span dir="auto" className="font-semibold text-stone-900">
+                          {cmp.itemName}
+                        </span>
+                        {cmp.itemAlias && (
+                          <span dir="auto" className="text-stone-400 ml-1">
+                            ({cmp.itemAlias})
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        {cmp.storePrices.map((sp) => {
+                          const isBest = sp.storeId === cmp.cheapestStoreId;
+                          return (
+                            <span
+                              key={sp.storeId}
+                              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-lg border text-[11px] font-semibold ${
+                                isBest
+                                  ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                  : 'bg-stone-50 text-stone-600 border-stone-200'
+                              }`}
+                            >
+                              <span
+                                className="w-2 h-2 rounded-full"
+                                style={{ backgroundColor: sp.storeColor }}
+                              />
+                              {sp.storeName}: {formatCurrency(sp.price)}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Recent Scanned Receipts */}
+            {spendSummary.recentReceipts.length > 0 && (
+              <div className="space-y-1.5 pt-1">
+                <h4 className="text-xs font-bold text-stone-700">Recent Scanned Receipts</h4>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {spendSummary.recentReceipts.map((r) => {
+                    const st = storeMap.get(r.storeId);
+                    return (
+                      <div
+                        key={r.id}
+                        className="rounded-xl border border-stone-200/80 bg-stone-50/70 px-3 py-2 flex items-center justify-between gap-2 text-xs"
+                      >
+                        <div className="min-w-0">
+                          <div className="font-semibold text-stone-800 truncate">
+                            {st?.name ?? 'Store'}
+                          </div>
+                          <div className="text-[10px] text-stone-500">
+                            {new Date(r.date).toLocaleDateString()} • {r.itemCount} item(s)
+                          </div>
+                        </div>
+                        <span className="font-bold text-stone-900 shrink-0">
+                          {formatCurrency(r.totalSpent)}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Learned Consumption Rhythm Table — Inline Editable */}

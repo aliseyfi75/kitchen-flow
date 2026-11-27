@@ -385,6 +385,7 @@ export function App() {
             <SettingsView
               items={activeState.items}
               stores={activeState.stores}
+              tripReceipts={activeState.tripReceipts}
               settings={activeState.settings}
               onUpdateSettings={isTourActive ? tourReadOnlyNotice : store.updateSettings}
               onUpdateItemLearning={isTourActive ? tourReadOnlyNotice : store.updateItemLearning}

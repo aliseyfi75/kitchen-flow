@@ -47,6 +47,7 @@ import {
   hasServingPourAction,
   inferContinuousStyle,
 } from '../utils/inventoryDisplay';
+import { appendPriceRecord } from '../utils/priceInsights';
 import { CategoryIcon } from './CategoryIcon';
 
 type EntryMode = 'portioned' | 'measured' | 'level_only';
@@ -162,6 +163,9 @@ export const ItemModal: React.FC<ItemModalProps> = ({
   );
   const [expiresAt, setExpiresAt] = useState(item?.expiresAt ? item.expiresAt.slice(0, 10) : '');
   const [notes, setNotes] = useState(item?.notes ?? '');
+  const [lastPriceInput, setLastPriceInput] = useState(
+    item?.lastPrice !== undefined && item.lastPrice > 0 ? String(item.lastPrice) : ''
+  );
   const [autoAddOnEmpty, setAutoAddOnEmpty] = useState(
     item?.autoAddOnEmpty ?? initialProfile.defaultAutoAdd
   );
@@ -568,6 +572,21 @@ export const ItemModal: React.FC<ItemModalProps> = ({
       }
     }
 
+    const parsedPrice = parseFloat(lastPriceInput);
+    const validManualPrice =
+      Number.isFinite(parsedPrice) && parsedPrice > 0 ? Number(parsedPrice.toFixed(2)) : undefined;
+    const priceChanged =
+      validManualPrice !== undefined &&
+      (validManualPrice !== item?.lastPrice || defaultStoreId !== item?.lastPriceStoreId);
+    const nextPriceHistory = priceChanged
+      ? appendPriceRecord(item?.priceHistory, {
+          price: validManualPrice,
+          storeId: defaultStoreId,
+          date: new Date().toISOString(),
+          packDescription: finalPackDescription,
+        })
+      : item?.priceHistory;
+
     const built: InventoryItem = {
       id: item?.id ?? `item-${Date.now()}`,
       name: name.trim(),
@@ -591,6 +610,14 @@ export const ItemModal: React.FC<ItemModalProps> = ({
       lastRestockedAt: item?.lastRestockedAt ?? new Date().toISOString(),
       lastUsedAt: item?.lastUsedAt,
       expiresAt: expiresAt ? new Date(`${expiresAt}T12:00:00`).toISOString() : undefined,
+      lastPrice: validManualPrice,
+      lastPriceStoreId:
+        validManualPrice !== undefined
+          ? priceChanged
+            ? defaultStoreId
+            : item?.lastPriceStoreId ?? defaultStoreId
+          : undefined,
+      priceHistory: nextPriceHistory,
       notes: notes.trim() || undefined,
       autoAddOnEmpty,
     };
@@ -1606,6 +1633,36 @@ export const ItemModal: React.FC<ItemModalProps> = ({
                     </div>
                   </div>
                 )}
+
+                {/* Optional Last / Typical Price */}
+                <div className="flex items-center justify-between gap-3 rounded-xl border border-stone-200/80 bg-stone-50/70 px-3.5 py-2.5">
+                  <div className="min-w-0">
+                    <label
+                      htmlFor="item-last-price"
+                      className="block text-xs font-semibold text-stone-700"
+                    >
+                      Last / Typical Price (Optional)
+                    </label>
+                    <p className="text-[11px] text-stone-500">
+                      Auto-filled from scanned receipts • used for Shopping List cart estimates
+                    </p>
+                  </div>
+                  <div className="relative w-28 shrink-0">
+                    <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs font-bold text-stone-400">
+                      $
+                    </span>
+                    <input
+                      id="item-last-price"
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={lastPriceInput}
+                      onChange={(e) => setLastPriceInput(e.target.value)}
+                      placeholder="0.00"
+                      className="w-full rounded-lg border border-stone-200 bg-white pl-6 pr-2.5 py-1.5 text-xs font-bold text-stone-800 text-right focus:outline-none focus:ring-2 focus:ring-teal-500"
+                    />
+                  </div>
+                </div>
 
                 <label className="flex items-center gap-2.5 text-xs text-stone-700 cursor-pointer select-none">
                   <input

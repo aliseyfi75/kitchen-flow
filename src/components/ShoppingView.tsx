@@ -29,6 +29,11 @@ import {
   formatShoppingQuantityLabel,
 } from '../utils/inventoryDisplay';
 import { inferProductDefaultsFromText } from '../utils/productCategories';
+import {
+  estimateShoppingListCost,
+  formatCurrency,
+  getBestKnownPriceForStore,
+} from '../utils/priceInsights';
 
 interface ShoppingViewProps {
   items: InventoryItem[];
@@ -261,12 +266,21 @@ export const ShoppingView: React.FC<ShoppingViewProps> = ({
   };
 
   const shoppingDayName = formatShoppingDayName(shoppingDay);
-  const totalUnchecked = shoppingList.filter((s) => !s.checked).length;
+  const uncheckedAll = useMemo(
+    () => shoppingList.filter((s) => !s.checked),
+    [shoppingList]
+  );
+  const totalUnchecked = uncheckedAll.length;
+  const overallEstimate = useMemo(
+    () => estimateShoppingListCost(uncheckedAll, itemMap),
+    [uncheckedAll, itemMap]
+  );
 
   const renderShoppingRow = (s: ShoppingItem) => {
     const reasonMeta = REASON_LABELS[s.reason];
     const linkedInv = s.inventoryItemId ? itemMap.get(s.inventoryItemId) : undefined;
     const liveForecast = linkedInv ? computeItemForecast(linkedInv, shoppingDay) : null;
+    const knownPrice = getBestKnownPriceForStore(linkedInv, s.storeId);
 
     let helperNote = s.note;
     if (s.reason === 'manual_from_kitchen' && linkedInv) {
@@ -328,6 +342,14 @@ export const ShoppingView: React.FC<ShoppingViewProps> = ({
               <span className={`px-1.5 py-0.5 rounded border font-medium ${reasonMeta.cls}`}>
                 {reasonMeta.label}
               </span>
+              {knownPrice !== undefined && !s.checked && (
+                <span
+                  className="px-1.5 py-0.5 rounded bg-stone-100 text-stone-700 font-semibold"
+                  title="Last recorded price"
+                >
+                  {formatCurrency(knownPrice, true)}
+                </span>
+              )}
             </div>
             {helperNote && !s.checked && (
               <div className="mt-1 text-[11px] text-stone-600 bg-stone-50 border border-stone-200/70 rounded-lg px-2 py-1 inline-block">
@@ -394,6 +416,14 @@ export const ShoppingView: React.FC<ShoppingViewProps> = ({
             <div className="inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-teal-100 bg-white/10 px-2.5 py-1 rounded-full">
               <ShoppingBag className="w-3.5 h-3.5" />
               {UI_LABELS.weekendTripTitle} • {shoppingDayName}
+              {overallEstimate.pricedCount > 0 && (
+                <span
+                  className="ml-1 pl-1.5 border-l border-white/25 text-white normal-case tracking-normal"
+                  title={`Estimated from ${overallEstimate.pricedCount} of ${overallEstimate.totalCount} unchecked items with recorded prices`}
+                >
+                  {formatCurrency(overallEstimate.totalEstimated, true)} est.
+                </span>
+              )}
             </div>
 
             {essentialStores.length > 0 ? (
@@ -657,13 +687,14 @@ export const ShoppingView: React.FC<ShoppingViewProps> = ({
         <div className="space-y-4">
           {groupedByStore.map(({ store, unchecked, checked, essentialCount, optionalCount }) => {
             const showCart = Boolean(expandedInCartStores[store.id]) || unchecked.length === 0;
+            const storeEstimate = estimateShoppingListCost(unchecked, itemMap);
             return (
               <div
                 key={store.id}
                 className="rounded-2xl border border-stone-200/90 bg-white overflow-hidden shadow-2xs"
               >
                 {/* Store Header */}
-                <div className="px-4 py-3 bg-stone-50/90 border-b border-stone-100 flex items-center justify-between gap-2">
+                <div className="px-4 py-3 bg-stone-50/90 border-b border-stone-100 flex items-center justify-between gap-2 flex-wrap">
                   <div className="flex items-center gap-2.5">
                     <span
                       className="w-3 h-3 rounded-full shrink-0"
@@ -677,7 +708,15 @@ export const ShoppingView: React.FC<ShoppingViewProps> = ({
                       </span>
                     )}
                   </div>
-                  <div className="flex items-center gap-1.5 text-[11px] font-semibold">
+                  <div className="flex items-center gap-1.5 text-[11px] font-semibold flex-wrap">
+                    {storeEstimate.pricedCount > 0 && (
+                      <span
+                        className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200"
+                        title={`Estimated from ${storeEstimate.pricedCount} of ${storeEstimate.totalCount} item(s) with known prices`}
+                      >
+                        {formatCurrency(storeEstimate.totalEstimated, true)} est.
+                      </span>
+                    )}
                     {essentialCount > 0 && (
                       <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-900">
                         {essentialCount} essential

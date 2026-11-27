@@ -76,6 +76,21 @@ export interface Store {
   updatedAt?: string;
 }
 
+export interface PriceRecord {
+  price: number;
+  storeId: string;
+  date: string;
+  packDescription?: string;
+}
+
+export interface TripReceipt {
+  id: string;
+  storeId: string;
+  date: string;
+  totalSpent: number;
+  itemCount: number;
+}
+
 export interface InventoryItem {
   id: string;
   name: string;
@@ -102,6 +117,9 @@ export interface InventoryItem {
   lastRestockedAt: string;
   lastUsedAt?: string;
   expiresAt?: string;
+  lastPrice?: number;
+  lastPriceStoreId?: string;
+  priceHistory?: PriceRecord[];
   notes?: string;
   autoAddOnEmpty: boolean;
   updatedAt?: string;
@@ -231,6 +249,7 @@ export interface KitchenState {
   events: UsageEvent[];
   recipes: MealRecipe[];
   weeklyPlan: PlannedMeal[];
+  tripReceipts?: TripReceipt[];
   settings: HouseholdSettings;
   syncMeta?: SyncMetadata;
 }

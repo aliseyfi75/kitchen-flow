@@ -197,6 +197,14 @@ export function mergeKitchenStates(
     .sort((a, b) => getTimestampMs(b.timestamp) - getTimestampMs(a.timestamp))
     .slice(0, 200);
 
+  // Merge tripReceipts by ID, newest first, capped at 100
+  const receiptMap = new Map<string, NonNullable<KitchenState['tripReceipts']>[number]>();
+  for (const r of remote.tripReceipts || []) receiptMap.set(r.id, r);
+  for (const r of local.tripReceipts || []) receiptMap.set(r.id, r);
+  const tripReceipts = Array.from(receiptMap.values())
+    .sort((a, b) => getTimestampMs(b.date) - getTimestampMs(a.date))
+    .slice(0, 100);
+
   // Merge settings by settingsUpdatedAt
   const localSettingsMs = getTimestampMs(local.syncMeta?.settingsUpdatedAt);
   const remoteSettingsMs = getTimestampMs(remote.syncMeta?.settingsUpdatedAt);
@@ -216,6 +224,7 @@ export function mergeKitchenStates(
     events,
     recipes,
     weeklyPlan,
+    tripReceipts,
     settings,
     syncMeta: {
       deletedIds: mergedDeleted,
