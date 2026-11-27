@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 import { useSupabaseAuth } from './hooks/useSupabaseAuth';
 import { useKitchenStore } from './hooks/useKitchenStore';
-import { t } from './i18n/translations';
+import { UI_LABELS } from './i18n/translations';
 import { KitchenView } from './components/KitchenView';
 import { ShoppingView } from './components/ShoppingView';
 import { MealPlannerView } from './components/MealPlannerView';
@@ -58,7 +58,6 @@ export function App() {
 
   const store = useKitchenStore(cloudContext);
   const { state: realState, toast, syncStatus } = store;
-  const lang = 'en' as const;
 
   const [activeTab, setActiveTab] = useState<TabId>('kitchen');
   const [showReceiptScanner, setShowReceiptScanner] = useState(false);
@@ -130,15 +129,15 @@ export function App() {
   ).length;
 
   const navItems: { id: TabId; label: string; icon: React.ReactNode; badge?: number }[] = [
-    { id: 'kitchen', label: t(lang, 'navKitchen'), icon: <Refrigerator className="w-5 h-5" /> },
+    { id: 'kitchen', label: UI_LABELS.navKitchen, icon: <Refrigerator className="w-5 h-5" /> },
     {
       id: 'shopping',
-      label: t(lang, 'navShopping'),
+      label: UI_LABELS.navShopping,
       icon: <ShoppingCart className="w-5 h-5" />,
       badge: essentialShoppingCount > 0 ? essentialShoppingCount : undefined,
     },
-    { id: 'meals', label: t(lang, 'navMeals'), icon: <ChefHat className="w-5 h-5" /> },
-    { id: 'settings', label: t(lang, 'navInsights'), icon: <Settings className="w-5 h-5" /> },
+    { id: 'meals', label: UI_LABELS.navMeals, icon: <ChefHat className="w-5 h-5" /> },
+    { id: 'settings', label: UI_LABELS.navInsights, icon: <Settings className="w-5 h-5" /> },
   ];
 
   return (
@@ -156,7 +155,7 @@ export function App() {
             </div>
             <div className="min-w-0 flex items-center gap-1.5 sm:gap-2">
               <h1 className="font-bold text-sm sm:text-lg tracking-tight text-stone-900 whitespace-nowrap">
-                {t(lang, 'appName')}
+                {UI_LABELS.appName}
               </h1>
               {auth.mode === 'cloud' && (
                 <span
@@ -239,7 +238,7 @@ export function App() {
                 title="Simple mode — quick everyday logging"
               >
                 <Sparkles className="w-3 h-3 hidden xs:inline" />
-                {t(lang, 'simpleMode')}
+                {UI_LABELS.simpleMode}
               </button>
               <button
                 type="button"
@@ -254,7 +253,7 @@ export function App() {
                 title="Detailed mode — nutrition facts, micronutrients & label scanner"
               >
                 <Layers className="w-3 h-3 hidden xs:inline" />
-                {t(lang, 'detailedMode')}
+                {UI_LABELS.detailedMode}
               </button>
             </div>
 
@@ -291,7 +290,6 @@ export function App() {
             stores={activeState.stores}
             shoppingList={activeState.shoppingList}
             shoppingDay={activeState.settings.shoppingDay}
-            lang={lang}
             uiMode={uiMode}
             eatingMode={activeState.settings.eatingMode}
             guestCount={activeState.settings.guestCount}
@@ -325,7 +323,6 @@ export function App() {
             shoppingList={activeState.shoppingList}
             shoppingDay={activeState.settings.shoppingDay}
             forecastHorizonDays={activeState.settings.forecastHorizonDays}
-            lang={lang}
             uiMode={uiMode}
             onSyncForecast={isTourActive ? tourReadOnlyNotice : store.syncForecastToShoppingList}
             onAddShoppingItem={isTourActive ? tourReadOnlyNotice : store.addShoppingItem}
@@ -347,7 +344,6 @@ export function App() {
             dailyProteinTarget={activeState.settings.dailyProteinTarget}
             dailySugarLimit={activeState.settings.dailySugarLimit}
             shoppingDay={activeState.settings.shoppingDay}
-            lang={lang}
             uiMode={uiMode}
             onSetWeeklyPlan={isTourActive ? tourReadOnlyNotice : store.setWeeklyPlan}
             onUpdateMealServings={isTourActive ? tourReadOnlyNotice : store.updatePlannedMealServings}
@@ -375,11 +371,11 @@ export function App() {
         )}
       </main>
 
-      {/* Toast Notification */}
+      {/* Toast Notification with Optional Undo Button */}
       {toast && (
         <div className="fixed bottom-[calc(4.75rem+env(safe-area-inset-bottom,0px))] lg:bottom-6 left-1/2 -translate-x-1/2 z-50 px-4 w-full max-w-md pointer-events-none">
           <div
-            className={`rounded-2xl px-4 py-3 text-xs sm:text-sm font-semibold text-white shadow-xl text-center ${
+            className={`pointer-events-auto rounded-2xl px-4 py-3 text-xs sm:text-sm font-semibold text-white shadow-xl flex items-center justify-between gap-3 ${
               toast.tone === 'amber'
                 ? 'bg-amber-600'
                 : toast.tone === 'rose'
@@ -387,7 +383,18 @@ export function App() {
                 : 'bg-stone-900'
             }`}
           >
-            {toast.text}
+            <span className={toast.onUndo ? 'text-left flex-1' : 'text-center flex-1'}>
+              {toast.text}
+            </span>
+            {toast.onUndo && (
+              <button
+                type="button"
+                onClick={toast.onUndo}
+                className="shrink-0 rounded-xl bg-white/20 hover:bg-white/30 active:scale-95 px-3 py-1 text-xs font-bold text-white transition"
+              >
+                {toast.undoLabel || 'Undo'}
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -425,7 +432,6 @@ export function App() {
         <ReceiptScanModal
           items={realState.items}
           stores={realState.stores}
-          lang={lang}
           onClose={() => setShowReceiptScanner(false)}
           onApplyReceipt={store.applyReceiptItems}
         />

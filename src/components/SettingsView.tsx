@@ -8,9 +8,9 @@ import {
   Store as StoreIcon,
   Trash2,
 } from 'lucide-react';
-import { HouseholdSettings, InventoryItem, Store, UILanguage } from '../types/kitchen';
+import { HouseholdSettings, InventoryItem, Store } from '../types/kitchen';
 import { computeItemForecast, formatShoppingDayName } from '../utils/forecasting';
-import { t } from '../i18n/translations';
+import { UI_LABELS } from '../i18n/translations';
 import { formatItemStockSummary } from '../utils/inventoryDisplay';
 
 interface SettingsViewProps {
@@ -169,11 +169,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   onDeleteStore,
   onReplayTour,
 }) => {
-  const lang: UILanguage = 'en';
   const [storeName, setStoreName] = useState('');
   const [storeAlias, setStoreAlias] = useState('');
   const [storeColor, setStoreColor] = useState(STORE_COLORS[0]);
   const [editingColorStoreId, setEditingColorStoreId] = useState<string | null>(null);
+  const [confirmDeleteStoreId, setConfirmDeleteStoreId] = useState<string | null>(null);
   const [rhythmSearch, setRhythmSearch] = useState('');
 
   const filteredRhythmItems = useMemo(() => {
@@ -234,7 +234,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               >
                 {[6, 0, 5, 1, 2, 3, 4].map((d) => (
                   <option key={d} value={d}>
-                    {formatShoppingDayName(d, lang)}
+                    {formatShoppingDayName(d)}
                   </option>
                 ))}
               </select>
@@ -309,12 +309,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       <div className="rounded-3xl border border-stone-200 bg-white p-5 space-y-4 shadow-2xs">
         <div className="flex items-center gap-2">
           <StoreIcon className="w-5 h-5 text-teal-700" />
-          <h3 className="font-bold text-stone-900">{t(lang, 'storesManager')}</h3>
+          <h3 className="font-bold text-stone-900">{UI_LABELS.storesManager}</h3>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
           {stores.map((st) => {
             const picking = editingColorStoreId === st.id;
+            const confirmingDel = confirmDeleteStoreId === st.id;
             return (
               <div key={st.id} className="rounded-2xl border border-stone-200 p-3 space-y-2.5">
                 <div className="flex items-center justify-between gap-2">
@@ -337,13 +338,36 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     </div>
                   </div>
                   {stores.length > 1 && (
-                    <button
-                      type="button"
-                      onClick={() => onDeleteStore(st.id)}
-                      className="p-1.5 rounded-lg text-stone-400 hover:text-rose-600 hover:bg-rose-50"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
+                    confirmingDel ? (
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onDeleteStore(st.id);
+                            setConfirmDeleteStoreId(null);
+                          }}
+                          className="px-2 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-bold"
+                        >
+                          Remove
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDeleteStoreId(null)}
+                          className="px-1.5 py-1 rounded-lg text-[10px] font-semibold text-stone-500 hover:bg-stone-100"
+                        >
+                          No
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setConfirmDeleteStoreId(st.id)}
+                        className="p-1.5 rounded-lg text-stone-400 hover:text-rose-600 hover:bg-rose-50"
+                        aria-label={`Remove ${st.name}`}
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )
                   )}
                 </div>
 
@@ -432,7 +456,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           <div>
             <div className="flex items-center gap-2">
               <Activity className="w-5 h-5 text-teal-700" />
-              <h3 className="font-bold text-stone-900">{t(lang, 'velocityInsights')}</h3>
+              <h3 className="font-bold text-stone-900">{UI_LABELS.velocityInsights}</h3>
             </div>
             <p className="text-[11px] text-stone-500 mt-0.5">
               Edit cycle days, daily burn rate, or preferred store inline — everything stays synced automatically.

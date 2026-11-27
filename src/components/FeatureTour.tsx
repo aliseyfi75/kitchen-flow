@@ -103,7 +103,7 @@ export const TOUR_STEPS: TourStepDef[] = [
     uiMode: 'simple',
     badge: 'Settings & 2-Phone Auto-Sync',
     title: 'Tailored to Your Household, Synced Live',
-    subtitle: 'Every change auto-saves and syncs in real time between Ali & Keemia.',
+    subtitle: 'Every change auto-saves and syncs in real time across your household phones.',
     bullets: [
       'Customize store colors, shopping day, 10-day Forecast Radar horizon, and Protein / Sugar targets.',
       'Edit any item’s Learned Cycle, Burn Rate, or Learned Store inline right in the table.',

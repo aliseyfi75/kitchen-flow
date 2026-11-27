@@ -451,7 +451,6 @@ export function createTourDemoState(): KitchenState {
       },
     ],
     settings: {
-      language: 'en',
       uiMode: 'simple',
       eatingMode: 'together',
       guestCount: 4,
@@ -461,9 +460,9 @@ export function createTourDemoState(): KitchenState {
       dailyProteinTarget: 130,
       dailySugarLimit: 36,
       householdSize: 2,
-      activeUser: 'Ali',
+      activeUser: 'Household',
       defaultTools: ['air_fryer', 'oven', 'pan'],
-      householdName: 'Ali & Keemia Kitchen',
+      householdName: 'Our Kitchen',
     },
   };
 }

@@ -39,8 +39,6 @@ export type CookingTool =
 
 export type EffortLevel = 'exhausted' | 'normal' | 'batch_prep';
 
-export type UILanguage = 'en' | 'fa';
-
 export type UIMode = 'simple' | 'detailed';
 
 export type EatingMode = 'solo' | 'together' | 'guests';
@@ -75,6 +73,7 @@ export interface Store {
   alias?: string;
   color: string;
   notes?: string;
+  updatedAt?: string;
 }
 
 export interface InventoryItem {
@@ -105,6 +104,7 @@ export interface InventoryItem {
   expiresAt?: string;
   notes?: string;
   autoAddOnEmpty: boolean;
+  updatedAt?: string;
 }
 
 export type ShoppingReason =
@@ -129,6 +129,7 @@ export interface ShoppingItem {
   note?: string; // e.g., "Projected to run out mid-week next week (~Wed)" or "Added manually — have 5/8 left"
   checked: boolean;
   addedAt: string;
+  updatedAt?: string;
 }
 
 export interface UsageEvent {
@@ -168,6 +169,7 @@ export interface MealRecipe {
   ingredients: RecipeIngredient[];
   quickSteps: string[];
   isFavorite: boolean;
+  updatedAt?: string;
 }
 
 export interface PlannedMeal {
@@ -178,8 +180,11 @@ export interface PlannedMeal {
   recipeId: string;
   servings: number; // 1 = solo, 2 = together, 3+ = guests
   cooked: boolean;
+  /** Exact deductions applied when marked cooked, so un-marking cooked restores inventory accurately. */
+  deductedItems?: { itemId: string; amount: number }[];
   source: 'library' | 'ai_suggested';
   reasonNote: string;
+  updatedAt?: string;
 }
 
 export interface ReceiptParsedItem {
@@ -200,7 +205,6 @@ export interface ReceiptParsedItem {
 }
 
 export interface HouseholdSettings {
-  language: UILanguage;
   uiMode: UIMode;
   eatingMode: EatingMode;
   guestCount: number;
@@ -210,9 +214,14 @@ export interface HouseholdSettings {
   dailyProteinTarget: number;
   dailySugarLimit: number;
   householdSize: number;
-  activeUser: 'Ali' | 'Keemia';
+  activeUser: string;
   defaultTools: CookingTool[];
   householdName: string;
+}
+
+export interface SyncMetadata {
+  deletedIds?: Record<string, string>;
+  settingsUpdatedAt?: string;
 }
 
 export interface KitchenState {
@@ -223,6 +232,7 @@ export interface KitchenState {
   recipes: MealRecipe[];
   weeklyPlan: PlannedMeal[];
   settings: HouseholdSettings;
+  syncMeta?: SyncMetadata;
 }
 
 export type ForecastVerdict =

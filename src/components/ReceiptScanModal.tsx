@@ -17,7 +17,6 @@ import {
   ReceiptParsedItem,
   StorageZone,
   Store,
-  UILanguage,
 } from '../types/kitchen';
 import { scanReceiptWithGemini } from '../services/geminiEdge';
 import { CATEGORY_META, ZONE_META } from '../i18n/translations';
@@ -26,7 +25,6 @@ import { PRODUCT_CATEGORY_ORDER } from '../utils/productCategories';
 interface ReceiptScanModalProps {
   items: InventoryItem[];
   stores: Store[];
-  lang: UILanguage;
   onClose: () => void;
   onApplyReceipt: (storeId: string, parsedItems: ReceiptParsedItem[]) => void;
 }
@@ -34,7 +32,6 @@ interface ReceiptScanModalProps {
 export const ReceiptScanModal: React.FC<ReceiptScanModalProps> = ({
   items,
   stores,
-  lang,
   onClose,
   onApplyReceipt,
 }) => {
@@ -323,7 +320,7 @@ export const ReceiptScanModal: React.FC<ReceiptScanModalProps> = ({
                         >
                           {PRODUCT_CATEGORY_ORDER.map((c) => (
                             <option key={c} value={c}>
-                              {CATEGORY_META[c][lang]}
+                              {CATEGORY_META[c].en}
                             </option>
                           ))}
                         </select>
@@ -341,7 +338,7 @@ export const ReceiptScanModal: React.FC<ReceiptScanModalProps> = ({
                         >
                           {(['fridge', 'freezer', 'pantry'] as StorageZone[]).map((z) => (
                             <option key={z} value={z}>
-                              {ZONE_META[z][lang]}
+                              {ZONE_META[z].en}
                             </option>
                           ))}
                         </select>
