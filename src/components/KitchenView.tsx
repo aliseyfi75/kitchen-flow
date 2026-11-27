@@ -19,7 +19,9 @@ import {
   RefreshCw,
   Search,
   ShoppingCart,
+  SlidersHorizontal,
   Snowflake,
+  Sparkles,
   Thermometer,
   Trash2,
   TrendingDown,
@@ -56,8 +58,12 @@ import { CategoryIcon } from './CategoryIcon';
 const ItemModal = lazy(() =>
   import('./ItemModal').then((m) => ({ default: m.ItemModal }))
 );
+const PantryStarterModal = lazy(() =>
+  import('./PantryStarterModal').then((m) => ({ default: m.PantryStarterModal }))
+);
 
 type KitchenGroupMode = 'category' | 'urgency';
+type PulseFilter = 'all' | 'expiring' | 'low';
 const GROUP_MODE_STORAGE_KEY = 'kitchenflow_kitchen_group_mode_v1';
 
 function loadInitialGroupMode(): KitchenGroupMode {
@@ -85,8 +91,10 @@ interface KitchenViewProps {
   onQuickRestock: (itemId: string) => void;
   onAddToShoppingManually: (itemId: string) => void;
   onSaveItem: (item: InventoryItem, isNew: boolean) => void;
+  onAddItemsBatch: (items: InventoryItem[]) => void;
   onDeleteItem: (itemId: string) => void;
   onOpenReceiptScanner: () => void;
+  onOpenShoppingTab?: () => void;
 }
 
 const ZONE_ICONS: Record<StorageZone, React.ReactNode> = {
@@ -102,8 +110,8 @@ interface ContinuousStockPanelProps {
 }
 
 /**
- * Interactive fill-level visualization & control for continuous products (milk, yogurt, oil, rice, herbs, spices).
- * Uses local drag preview so dragging the slider feels instant without spamming toasts on every tick.
+ * Calm fill-level gauge for continuous products (milk, yogurt, oil, rice, herbs, spices).
+ * Stays clutter-free at rest; tap "Adjust" or the progress bar to reveal level presets & fine slider.
  */
 const ContinuousStockPanel: React.FC<ContinuousStockPanelProps> = ({
   item,
@@ -113,6 +121,7 @@ const ContinuousStockPanel: React.FC<ContinuousStockPanelProps> = ({
   const rawPercent = getRawStockPercent(item);
   const clampedPercent = getClampedStockPercent(item);
   const [dragPct, setDragPct] = useState<number | null>(null);
+  const [showAdjuster, setShowAdjuster] = useState(false);
 
   useEffect(() => {
     setDragPct(null);
@@ -193,13 +202,36 @@ const ContinuousStockPanel: React.FC<ContinuousStockPanelProps> = ({
           )}
         </div>
 
-        <span className="font-semibold text-stone-500 shrink-0">
-          {item.remainingPortions > 0 ? `~${forecast.estimatedDaysLeft}d` : 'Empty'}
-        </span>
+        <div className="flex items-center gap-1.5 shrink-0">
+          <span className="font-semibold text-stone-500">
+            {item.remainingPortions > 0 ? `~${forecast.estimatedDaysLeft}d` : 'Empty'}
+          </span>
+          {item.remainingPortions > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowAdjuster((v) => !v)}
+              className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-bold border transition ${
+                showAdjuster
+                  ? 'bg-stone-900 text-white border-stone-900'
+                  : 'bg-stone-50 text-stone-600 border-stone-200 hover:border-teal-400 hover:text-teal-800'
+              }`}
+              title="Adjust fill level"
+            >
+              <SlidersHorizontal className="w-2.5 h-2.5" />
+              {showAdjuster ? 'Done' : 'Adjust'}
+            </button>
+          )}
+        </div>
       </div>
 
-      {/* Visual Gauge with Quarter Tick Marks */}
-      <div className="relative h-2.5 w-full rounded-full bg-stone-100 overflow-hidden">
+      {/* Visual Gauge with Quarter Tick Marks (tapping opens adjuster) */}
+      <button
+        type="button"
+        disabled={item.remainingPortions <= 0}
+        onClick={() => item.remainingPortions > 0 && setShowAdjuster((v) => !v)}
+        className="relative block h-2.5 w-full rounded-full bg-stone-100 overflow-hidden text-left cursor-pointer disabled:cursor-default"
+        aria-label={`Toggle level adjuster for ${item.name}`}
+      >
         <div
           className={`h-full rounded-full transition-all duration-200 ${barColor}`}
           style={{ width: `${displayPct}%` }}
@@ -209,11 +241,11 @@ const ContinuousStockPanel: React.FC<ContinuousStockPanelProps> = ({
           <span className="w-px h-full bg-white/60" />
           <span className="w-px h-full bg-white/60" />
         </div>
-      </div>
+      </button>
 
-      {/* Quick Level Presets + Smooth Drag Slider (shown while item is in stock) */}
-      {item.remainingPortions > 0 && (
-        <div className="space-y-1.5 pt-0.5">
+      {/* Expandable Level Presets + Smooth Drag Slider */}
+      {item.remainingPortions > 0 && showAdjuster && (
+        <div className="space-y-1.5 pt-1 rounded-xl bg-stone-50/90 border border-stone-200/70 p-2">
           <div className="grid grid-cols-5 gap-1">
             {CONTINUOUS_LEVEL_PRESETS.map((preset) => {
               const isActive = !isOverstocked && activePreset === preset.pct;
@@ -225,7 +257,7 @@ const ContinuousStockPanel: React.FC<ContinuousStockPanelProps> = ({
                   className={`py-1.5 rounded-lg text-[11px] font-bold transition border ${
                     isActive
                       ? 'bg-stone-900 text-white border-stone-900 shadow-2xs'
-                      : 'bg-stone-50 text-stone-600 border-stone-200 hover:bg-stone-100 hover:text-stone-900'
+                      : 'bg-white text-stone-600 border-stone-200 hover:bg-stone-100 hover:text-stone-900'
                   }`}
                   title={`Set ${item.name} to ${preset.pct}% (${preset.word})`}
                 >
@@ -235,9 +267,8 @@ const ContinuousStockPanel: React.FC<ContinuousStockPanelProps> = ({
             })}
           </div>
 
-          {/* Fine Adjustment Slider */}
           <div className="flex items-center gap-2 px-0.5">
-            <span className="text-[10px] font-medium text-stone-400">Adjust</span>
+            <span className="text-[10px] font-medium text-stone-400">Fine</span>
             <input
               type="range"
               min={0}
@@ -277,15 +308,19 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
   onQuickRestock,
   onAddToShoppingManually,
   onSaveItem,
+  onAddItemsBatch,
   onDeleteItem,
   onOpenReceiptScanner,
+  onOpenShoppingTab,
 }) => {
   const [zoneFilter, setZoneFilter] = useState<'all' | StorageZone>('all');
   const [categoryFilter, setCategoryFilter] = useState<'all' | FoodCategory>('all');
+  const [pulseFilter, setPulseFilter] = useState<PulseFilter>('all');
   const [groupMode, setGroupMode] = useState<KitchenGroupMode>(() => loadInitialGroupMode());
   const [collapsedCategories, setCollapsedCategories] = useState<Record<string, boolean>>({});
   const [recategorizingItemId, setRecategorizingItemId] = useState<string | null>(null);
   const [search, setSearch] = useState('');
+  const [showPantryStarter, setShowPantryStarter] = useState(false);
   const [modalState, setModalState] = useState<{
     item: InventoryItem | null;
     initialTab: 'basics' | 'nutrition';
@@ -318,6 +353,23 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
     }));
   }, [items, shoppingDay]);
 
+  const pulseStats = useMemo(() => {
+    let expiring = 0;
+    let lowOrOut = 0;
+    for (const { forecast } of enriched) {
+      if (forecast.expiringSoon) expiring += 1;
+      if (
+        forecast.verdict === 'out' ||
+        forecast.verdict === 'buy_this_weekend' ||
+        forecast.verdict === 'runs_out_next_week'
+      ) {
+        lowOrOut += 1;
+      }
+    }
+    const pendingShopping = shoppingList.filter((s) => !s.checked).length;
+    return { expiring, lowOrOut, pendingShopping };
+  }, [enriched, shoppingList]);
+
   // Categories present in the currently selected zone
   const availableCategories = useMemo(() => {
     const counts = new Map<FoodCategory, number>();
@@ -346,6 +398,15 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
       .filter(({ item, forecast }) => {
         if (zoneFilter !== 'all' && item.zone !== zoneFilter) return false;
         if (categoryFilter !== 'all' && item.category !== categoryFilter) return false;
+        if (pulseFilter === 'expiring' && !forecast.expiringSoon) return false;
+        if (
+          pulseFilter === 'low' &&
+          forecast.verdict !== 'out' &&
+          forecast.verdict !== 'buy_this_weekend' &&
+          forecast.verdict !== 'runs_out_next_week'
+        ) {
+          return false;
+        }
         if (q) {
           const store = storeMap.get(forecast.learnedStoreId);
           const catMeta = CATEGORY_META[item.category];
@@ -379,7 +440,7 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
         if (diff !== 0) return diff;
         return a.forecast.estimatedDaysLeft - b.forecast.estimatedDaysLeft;
       });
-  }, [enriched, zoneFilter, categoryFilter, search, storeMap]);
+  }, [enriched, zoneFilter, categoryFilter, pulseFilter, search, storeMap]);
 
   // Grouped by FoodCategory (ordered by PRODUCT_CATEGORY_ORDER)
   const groupedByCategory = useMemo(() => {
@@ -857,73 +918,148 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
   };
 
   return (
-    <div className="space-y-4">
-      {/* Who's Eating? Serving Multiplier Strip */}
-      <div className="rounded-2xl border border-stone-200/90 bg-white px-3.5 py-2.5 shadow-2xs flex flex-wrap items-center justify-between gap-2.5">
-        <div className="flex items-center gap-2 text-xs font-semibold text-stone-700">
-          <Users className="w-4 h-4 text-teal-700" />
-          <span>{UI_LABELS.whosEating}</span>
+    <div className="space-y-3">
+      {/* Compact Kitchen Pulse + Serving Multiplier Bar (reclaims mobile above-the-fold space) */}
+      <div className="rounded-2xl border border-stone-200/90 bg-white px-3 py-2 shadow-2xs flex flex-wrap items-center justify-between gap-2">
+        {/* Tappable Kitchen Pulse Summary */}
+        <div className="flex items-center flex-wrap gap-1.5 text-[11px] font-semibold">
+          {items.length === 0 ? (
+            <button
+              type="button"
+              onClick={() => setShowPantryStarter(true)}
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-teal-50 text-teal-800 border border-teal-200 hover:bg-teal-100 transition"
+            >
+              <Sparkles className="w-3 h-3" />
+              30s Pantry Starter
+            </button>
+          ) : (
+            <>
+              {pulseStats.expiring > 0 && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    setPulseFilter((p) => (p === 'expiring' ? 'all' : 'expiring'))
+                  }
+                  className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full border transition ${
+                    pulseFilter === 'expiring'
+                      ? 'bg-rose-600 text-white border-rose-600'
+                      : 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100'
+                  }`}
+                >
+                  <AlertTriangle className="w-3 h-3" />
+                  {pulseStats.expiring} expiring
+                </button>
+              )}
+              {pulseStats.lowOrOut > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setPulseFilter((p) => (p === 'low' ? 'all' : 'low'))}
+                  className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full border transition ${
+                    pulseFilter === 'low'
+                      ? 'bg-amber-600 text-white border-amber-600'
+                      : 'bg-amber-50 text-amber-800 border-amber-200 hover:bg-amber-100'
+                  }`}
+                >
+                  <Clock className="w-3 h-3" />
+                  {pulseStats.lowOrOut} low / out
+                </button>
+              )}
+              {pulseStats.expiring === 0 && pulseStats.lowOrOut === 0 && (
+                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                  <CheckCircle2 className="w-3 h-3" />
+                  All stocked ({items.length})
+                </span>
+              )}
+              {pulseStats.pendingShopping > 0 && (
+                <button
+                  type="button"
+                  onClick={() => onOpenShoppingTab?.()}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-stone-100 hover:bg-stone-200/80 text-stone-700 transition"
+                  title="Jump to Shopping tab"
+                >
+                  <ShoppingCart className="w-3 h-3 text-teal-700" />
+                  {pulseStats.pendingShopping} to buy
+                </button>
+              )}
+              {items.length < 5 && (
+                <button
+                  type="button"
+                  onClick={() => setShowPantryStarter(true)}
+                  className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-teal-50 text-teal-800 border border-teal-200 hover:bg-teal-100 transition"
+                >
+                  <Sparkles className="w-3 h-3" />
+                  Starter Pack
+                </button>
+              )}
+            </>
+          )}
         </div>
 
-        <div className="flex items-center flex-wrap gap-1.5">
+        {/* Compact Inline Serving Selector */}
+        <div
+          className="inline-flex items-center rounded-xl bg-stone-100 p-0.5 gap-0.5 text-[11px] font-bold shrink-0"
+          role="group"
+          aria-label="Serving multiplier"
+        >
           <button
             type="button"
             onClick={() => onChangeEatingMode('solo')}
-            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition ${
+            className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg transition ${
               eatingMode === 'solo'
                 ? 'bg-teal-700 text-white shadow-2xs'
-                : 'bg-stone-100 text-stone-600 hover:bg-stone-200/70'
+                : 'text-stone-600 hover:text-stone-900'
             }`}
+            title="Solo (1×)"
           >
-            <User className="w-3.5 h-3.5" />
-            {UI_LABELS.solo}
+            <User className="w-3 h-3" />
+            1×
           </button>
-
           <button
             type="button"
             onClick={() => onChangeEatingMode('together')}
-            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition ${
+            className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg transition ${
               eatingMode === 'together'
                 ? 'bg-teal-700 text-white shadow-2xs'
-                : 'bg-stone-100 text-stone-600 hover:bg-stone-200/70'
+                : 'text-stone-600 hover:text-stone-900'
             }`}
+            title="Together (2×)"
           >
-            <Users className="w-3.5 h-3.5" />
-            {UI_LABELS.together}
+            <Users className="w-3 h-3" />
+            2×
           </button>
-
           <div
-            className={`inline-flex items-center rounded-xl transition ${
+            className={`inline-flex items-center rounded-lg transition ${
               eatingMode === 'guests'
                 ? 'bg-indigo-700 text-white shadow-2xs'
-                : 'bg-stone-100 text-stone-600 hover:bg-stone-200/70'
+                : 'text-stone-600 hover:text-stone-900'
             }`}
           >
             <button
               type="button"
               onClick={() => onChangeEatingMode('guests', Math.max(3, guestCount))}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold"
+              className="inline-flex items-center gap-1 px-2 py-1"
+              title="Guests serving multiplier"
             >
-              <PartyPopper className="w-3.5 h-3.5" />
-              {UI_LABELS.guests} ({guestCount}×)
+              <PartyPopper className="w-3 h-3" />
+              {guestCount}×
             </button>
             {eatingMode === 'guests' && (
-              <div className="flex items-center border-l border-white/20 px-1 gap-0.5">
+              <div className="flex items-center border-l border-white/20 px-0.5">
                 <button
                   type="button"
                   onClick={() => onChangeEatingMode('guests', Math.max(3, guestCount - 1))}
-                  className="p-1 rounded hover:bg-white/15"
+                  className="p-0.5 rounded hover:bg-white/15"
                   aria-label="Decrease guests"
                 >
-                  <Minus className="w-3 h-3" />
+                  <Minus className="w-2.5 h-2.5" />
                 </button>
                 <button
                   type="button"
                   onClick={() => onChangeEatingMode('guests', Math.min(12, guestCount + 1))}
-                  className="p-1 rounded hover:bg-white/15"
+                  className="p-0.5 rounded hover:bg-white/15"
                   aria-label="Increase guests"
                 >
-                  <Plus className="w-3 h-3" />
+                  <Plus className="w-2.5 h-2.5" />
                 </button>
               </div>
             )}
@@ -932,7 +1068,7 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
       </div>
 
       {/* Search + Quick Actions (Scan Receipt + Add Item — ONLY in Kitchen tab) */}
-      <div className="flex flex-col sm:flex-row gap-2.5 items-stretch sm:items-center justify-between">
+      <div className="flex flex-col sm:flex-row gap-2 items-stretch sm:items-center justify-between">
         <div className="relative flex-1">
           <Search className="w-4 h-4 text-stone-400 absolute top-1/2 -translate-y-1/2 left-3.5 pointer-events-none" />
           <input
@@ -940,7 +1076,7 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder={UI_LABELS.searchPlaceholder}
-            className="w-full rounded-xl border border-stone-200 bg-white pl-10 pr-4 py-2.5 text-sm shadow-2xs focus:outline-none focus:ring-2 focus:ring-teal-500"
+            className="w-full rounded-xl border border-stone-200 bg-white pl-10 pr-4 py-2 text-sm shadow-2xs focus:outline-none focus:ring-2 focus:ring-teal-500"
           />
         </div>
 
@@ -948,7 +1084,7 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
           <button
             type="button"
             onClick={onOpenReceiptScanner}
-            className="flex-1 sm:flex-none inline-flex items-center justify-center gap-1.5 rounded-xl bg-white border border-teal-200 hover:bg-teal-50 text-teal-800 px-3.5 py-2.5 text-xs sm:text-sm font-semibold shadow-2xs transition"
+            className="flex-1 sm:flex-none inline-flex items-center justify-center gap-1.5 rounded-xl bg-white border border-teal-200 hover:bg-teal-50 text-teal-800 px-3 py-2 text-xs sm:text-sm font-semibold shadow-2xs transition"
           >
             <Receipt className="w-4 h-4" />
             {UI_LABELS.scanReceipt}
@@ -963,7 +1099,7 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
                 initialCategory: categoryFilter !== 'all' ? categoryFilter : undefined,
               })
             }
-            className="flex-1 sm:flex-none inline-flex items-center justify-center gap-1.5 rounded-xl bg-teal-700 hover:bg-teal-800 text-white px-4 py-2.5 text-xs sm:text-sm font-semibold shadow-xs transition"
+            className="flex-1 sm:flex-none inline-flex items-center justify-center gap-1.5 rounded-xl bg-teal-700 hover:bg-teal-800 text-white px-3.5 py-2 text-xs sm:text-sm font-semibold shadow-xs transition"
           >
             <Plus className="w-4 h-4" />
             {UI_LABELS.addItem}
@@ -972,9 +1108,9 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
       </div>
 
       {/* Zone Pill Filter + By Category / By Urgency Switch + Category Filter Bar */}
-      <div className="space-y-2.5">
+      <div className="space-y-2">
         <div className="flex items-center justify-between gap-2 flex-wrap">
-          <div className="flex items-center gap-2 overflow-x-auto pb-0.5">
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
             {(['all', 'fridge', 'freezer', 'pantry'] as const).map((z) => {
               const count = z === 'all' ? items.length : items.filter((i) => i.zone === z).length;
               const active = zoneFilter === z;
@@ -983,7 +1119,7 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
                   key={z}
                   type="button"
                   onClick={() => setZoneFilter(z)}
-                  className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-semibold transition shrink-0 ${
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold transition shrink-0 ${
                     active
                       ? 'bg-stone-900 text-white shadow-xs'
                       : 'bg-white border border-stone-200 text-stone-600 hover:bg-stone-50'
@@ -1092,15 +1228,45 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
 
       {/* Inventory Display: Grouped by Category OR Flat Urgency Grid */}
       {filtered.length === 0 ? (
-        <div className="rounded-3xl border border-dashed border-stone-300 bg-white p-10 text-center space-y-2">
-          <div className="text-sm font-semibold text-stone-800">
+        <div className="rounded-3xl border border-dashed border-stone-300 bg-white p-8 sm:p-10 text-center space-y-3">
+          <div className="text-sm font-bold text-stone-800">
             {items.length === 0 ? 'Your kitchen is clean and ready!' : 'No matching items found.'}
           </div>
-          <p className="text-xs text-stone-500">
+          <p className="text-xs text-stone-500 max-w-md mx-auto">
             {items.length === 0
-              ? 'Tap "+ Add Item" to scan a barcode or pick a product type, or tap "Scan Receipt" after a shopping trip.'
-              : 'Try clearing your search or switching storage zones / categories.'}
+              ? 'Populate your everyday staples in 30 seconds, scan a grocery receipt, or add items one by one.'
+              : 'Try clearing your search, pulse filter, or switching storage zones / categories.'}
           </p>
+          {items.length === 0 ? (
+            <div className="flex items-center justify-center flex-wrap gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setShowPantryStarter(true)}
+                className="inline-flex items-center gap-1.5 rounded-xl bg-teal-700 hover:bg-teal-800 text-white px-4 py-2.5 text-xs font-bold shadow-xs transition"
+              >
+                <Sparkles className="w-4 h-4" />
+                30-Second Pantry Starter
+              </button>
+              <button
+                type="button"
+                onClick={onOpenReceiptScanner}
+                className="inline-flex items-center gap-1.5 rounded-xl bg-white border border-teal-200 hover:bg-teal-50 text-teal-800 px-4 py-2.5 text-xs font-bold transition"
+              >
+                <Receipt className="w-4 h-4" />
+                Scan Receipt
+              </button>
+            </div>
+          ) : (
+            pulseFilter !== 'all' && (
+              <button
+                type="button"
+                onClick={() => setPulseFilter('all')}
+                className="inline-flex items-center gap-1 rounded-xl bg-stone-100 hover:bg-stone-200 text-stone-700 px-3 py-1.5 text-xs font-semibold"
+              >
+                Clear pulse filter
+              </button>
+            )
+          )}
         </div>
       ) : groupMode === 'category' ? (
         <div className="space-y-4">
@@ -1205,6 +1371,17 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
             onClose={() => setModalState(null)}
             onSave={onSaveItem}
             onDelete={onDeleteItem}
+          />
+        </Suspense>
+      )}
+
+      {showPantryStarter && (
+        <Suspense fallback={null}>
+          <PantryStarterModal
+            existingItems={items}
+            stores={stores}
+            onClose={() => setShowPantryStarter(false)}
+            onAddItems={onAddItemsBatch}
           />
         </Suspense>
       )}
