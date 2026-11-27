@@ -330,6 +330,7 @@ export function App() {
             onUpdateShoppingItem={isTourActive ? tourReadOnlyNotice : store.updateShoppingItem}
             onRemoveShoppingItem={isTourActive ? tourReadOnlyNotice : store.removeShoppingItem}
             onCompleteTrip={isTourActive ? tourReadOnlyNotice : store.completeShoppingTrip}
+            onNotify={store.notify}
           />
         )}
 
@@ -350,6 +351,8 @@ export function App() {
             onMarkMealCooked={isTourActive ? tourReadOnlyNotice : store.markMealCooked}
             onCookRecipeDirect={isTourActive ? tourReadOnlyNotice : store.cookRecipeDirect}
             onAddRecipe={isTourActive ? tourReadOnlyNotice : store.addRecipe}
+            onUpdateRecipe={isTourActive ? tourReadOnlyNotice : store.updateRecipe}
+            onDeleteRecipe={isTourActive ? tourReadOnlyNotice : store.deleteRecipe}
             onAddCuisine={isTourActive ? tourReadOnlyNotice : store.addCuisine}
             onToggleFavorite={isTourActive ? tourReadOnlyNotice : store.toggleFavoriteRecipe}
             onAddMissingToShopping={isTourActive ? tourReadOnlyNotice : store.addShoppingItem}

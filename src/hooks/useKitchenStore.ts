@@ -1203,6 +1203,62 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
     [notify]
   );
 
+  const updateRecipe = useCallback(
+    (recipe: MealRecipe, newInventoryItems: InventoryItem[] = []) => {
+      const nowIso = new Date().toISOString();
+      const stampedItems = newInventoryItems.map((it) => ({ ...it, updatedAt: nowIso }));
+      setState((prev) => {
+        const existingCuisines = prev.settings.cuisines || [];
+        const hasCuisine = existingCuisines.some(
+          (c) => c.toLowerCase() === recipe.cuisine.toLowerCase()
+        );
+        return {
+          ...prev,
+          items: stampedItems.length > 0 ? [...stampedItems, ...prev.items] : prev.items,
+          recipes: prev.recipes.map((r) =>
+            r.id === recipe.id ? { ...recipe, updatedAt: nowIso } : r
+          ),
+          settings: hasCuisine
+            ? prev.settings
+            : { ...prev.settings, cuisines: [...existingCuisines, recipe.cuisine] },
+          syncMeta: hasCuisine
+            ? prev.syncMeta
+            : { ...prev.syncMeta, settingsUpdatedAt: nowIso },
+        };
+      });
+      notify(`Updated "${recipe.name}"`, 'teal');
+    },
+    [notify]
+  );
+
+  const deleteRecipe = useCallback(
+    (recipeId: string) => {
+      const snapshot = stateRef.current;
+      const target = snapshot.recipes.find((r) => r.id === recipeId);
+      const removedPlanIds = snapshot.weeklyPlan
+        .filter((m) => m.recipeId === recipeId)
+        .map((m) => m.id);
+      const nowIso = new Date().toISOString();
+
+      setState((prev) => ({
+        ...prev,
+        recipes: prev.recipes.filter((r) => r.id !== recipeId),
+        weeklyPlan: prev.weeklyPlan.filter((m) => m.recipeId !== recipeId),
+        syncMeta: recordTombstones(prev.syncMeta, [recipeId, ...removedPlanIds], nowIso),
+      }));
+
+      notify(`Deleted "${target?.name ?? 'meal'}" from library`, 'rose', {
+        onUndo: () =>
+          restoreSnapshot(
+            snapshot,
+            [recipeId, ...removedPlanIds],
+            `Restored "${target?.name ?? 'meal'}"`
+          ),
+      });
+    },
+    [notify, restoreSnapshot]
+  );
+
   const addCuisine = useCallback(
     (cuisineName: string) => {
       const clean = cuisineName.trim();
@@ -1615,13 +1671,14 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
     updateStore,
     deleteStore,
     addRecipe: addRecipeWithNewIngredients,
+    updateRecipe,
+    deleteRecipe,
     addCuisine,
     cookRecipeDirect,
     toggleFavoriteRecipe,
     setWeeklyPlan,
     updatePlannedMealServings,
     markMealCooked,
-    applyReceiptItemsRaw: applyReceiptItems,
     updateSettings,
     notify,
     dismissToast,

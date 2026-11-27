@@ -1,10 +1,13 @@
 import React, { useMemo, useState } from 'react';
 import {
+  BookmarkPlus,
+  CalendarPlus,
   CheckCircle2,
   ChefHat,
   ChevronDown,
   ChevronUp,
   Clock,
+  Edit3,
   Flame,
   Heart,
   Mic,
@@ -60,7 +63,9 @@ interface MealPlannerViewProps {
   onAddRecipe: (
     recipe: Omit<MealRecipe, 'id'> & { id?: string },
     newInventoryItems?: InventoryItem[]
-  ) => void;
+  ) => string | void;
+  onUpdateRecipe: (recipe: MealRecipe, newInventoryItems?: InventoryItem[]) => void;
+  onDeleteRecipe: (recipeId: string) => void;
   onAddCuisine: (cuisine: string) => void;
   onToggleFavorite: (recipeId: string) => void;
   onAddMissingToShopping: (entry: Omit<ShoppingItem, 'id' | 'addedAt' | 'checked'>) => void;
@@ -90,6 +95,12 @@ interface DraftIngredientRow {
   newRemainingStock: number;
 }
 
+interface EphemeralAiIdea extends Omit<MealRecipe, 'id'> {
+  tempId: string;
+  reasonNote?: string;
+  savedRecipeId?: string;
+}
+
 export const MealPlannerView: React.FC<MealPlannerViewProps> = ({
   items,
   stores,
@@ -106,6 +117,8 @@ export const MealPlannerView: React.FC<MealPlannerViewProps> = ({
   onMarkMealCooked,
   onCookRecipeDirect,
   onAddRecipe,
+  onUpdateRecipe,
+  onDeleteRecipe,
   onAddCuisine,
   onToggleFavorite,
   onAddMissingToShopping,
@@ -121,15 +134,18 @@ export const MealPlannerView: React.FC<MealPlannerViewProps> = ({
   const [expandedRecipeId, setExpandedRecipeId] = useState<string | null>(null);
   const [isCallingGemini, setIsCallingGemini] = useState(false);
   const [geminiNotice, setGeminiNotice] = useState<string | null>(null);
+  const [aiCandidates, setAiCandidates] = useState<EphemeralAiIdea[]>([]);
 
   // Food Library controls (search, filter by Ready-to-Cook, per-card serving selector)
   const [librarySearch, setLibrarySearch] = useState('');
   const [libraryFilter, setLibraryFilter] = useState<'all' | 'ready' | 'favorites'>('all');
   const [libraryServings, setLibraryServings] = useState<Record<string, number>>({});
   const [expandedLibraryId, setExpandedLibraryId] = useState<string | null>(null);
+  const [confirmDeleteRecipeId, setConfirmDeleteRecipeId] = useState<string | null>(null);
 
-  // Add Meal form state
+  // Add / Edit Meal form state
   const [showAddRecipe, setShowAddRecipe] = useState(false);
+  const [editingRecipeId, setEditingRecipeId] = useState<string | null>(null);
   const [showVoiceModal, setShowVoiceModal] = useState(false);
   const [recName, setRecName] = useState('');
   const [recAlias, setRecAlias] = useState('');
@@ -138,6 +154,7 @@ export const MealPlannerView: React.FC<MealPlannerViewProps> = ({
   const [newCuisineInput, setNewCuisineInput] = useState('');
   const [showNewCuisineBox, setShowNewCuisineBox] = useState(false);
   const [recTools, setRecTools] = useState<CookingTool[]>(['air_fryer']);
+  const [recStepsText, setRecStepsText] = useState('');
   const [draftIngredients, setDraftIngredients] = useState<DraftIngredientRow[]>([]);
 
   // Inline "Add brand-new ingredient not in inventory" fields
@@ -276,43 +293,14 @@ export const MealPlannerView: React.FC<MealPlannerViewProps> = ({
         return;
       }
 
-      const dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-      const createdIds: { id: string; recipe: Omit<MealRecipe, 'id'> & { reasonNote?: string } }[] = [];
-      for (const r of aiRecipes) {
-        const id = `rec-ai-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-        onAddRecipe({ ...r, id }, []);
-        createdIds.push({ id, recipe: r });
-      }
-
-      const latestRecipes: MealRecipe[] = [
-        ...createdIds.map(({ id, recipe }) => ({ ...recipe, id })),
-        ...recipes,
-      ];
-      if (request.days === 0 && createdIds[0]) {
-        onSetWeeklyPlan([
-          {
-            id: `plan-ai-single-${Date.now()}`,
-            dayIndex: 0,
-            dayLabel: 'Next Meal',
-            slot: 'dinner',
-            recipeId: latestRecipes[0].id,
-            servings: 2,
-            cooked: false,
-            source: 'ai_suggested',
-            reasonNote: createdIds[0].recipe.reasonNote || 'Suggested by Gemini AI',
-          },
-        ]);
-      } else {
-        const generated = generateSmartWeeklyPlan(latestRecipes, items, request, 2);
-        onSetWeeklyPlan(
-          generated.map((m, idx) => ({
-            ...m,
-            dayLabel: dayNames[m.dayIndex % 7],
-            source: idx < createdIds.length ? 'ai_suggested' : m.source,
-          }))
-        );
-      }
-      setGeminiNotice(`Generated ${aiRecipes.length} meal idea(s) with Gemini AI!`);
+      const ideas: EphemeralAiIdea[] = aiRecipes.map((r, idx) => ({
+        ...r,
+        tempId: `ai-idea-${Date.now()}-${idx}`,
+      }));
+      setAiCandidates(ideas);
+      setGeminiNotice(
+        `Gemini suggested ${ideas.length} meal idea(s) below — save only the ones you want to keep!`
+      );
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Could not reach Gemini AI';
       setGeminiNotice(`Gemini AI unavailable (${msg}).`);
@@ -320,6 +308,35 @@ export const MealPlannerView: React.FC<MealPlannerViewProps> = ({
     } finally {
       setIsCallingGemini(false);
     }
+  };
+
+  const handleSaveAiIdea = (idea: EphemeralAiIdea): string | undefined => {
+    if (idea.savedRecipeId) return idea.savedRecipeId;
+    const assignedId = `rec-ai-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const { tempId: _tempId, reasonNote: _rn, savedRecipeId: _s, ...recipePayload } = idea;
+    const res = onAddRecipe({ ...recipePayload, id: assignedId }, []);
+    const finalId = typeof res === 'string' ? res : assignedId;
+    setAiCandidates((prev) =>
+      prev.map((c) => (c.tempId === idea.tempId ? { ...c, savedRecipeId: finalId } : c))
+    );
+    return finalId;
+  };
+
+  const handlePlanAiIdea = (idea: EphemeralAiIdea) => {
+    const recipeId = handleSaveAiIdea(idea);
+    if (!recipeId) return;
+    const nextPlanEntry: PlannedMeal = {
+      id: `plan-ai-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+      dayIndex: 0,
+      dayLabel: 'Next Meal',
+      slot: idea.mealType === 'lunch' ? 'lunch' : 'dinner',
+      recipeId,
+      servings: 2,
+      cooked: false,
+      source: 'ai_suggested',
+      reasonNote: idea.reasonNote || 'Suggested by Gemini AI',
+    };
+    onSetWeeklyPlan([nextPlanEntry, ...weeklyPlan.filter((m) => m.dayLabel !== 'Next Meal')]);
   };
 
   const groupedDays = useMemo(() => {
@@ -386,6 +403,64 @@ export const MealPlannerView: React.FC<MealPlannerViewProps> = ({
     setRecCuisine(clean);
     setNewCuisineInput('');
     setShowNewCuisineBox(false);
+  };
+
+  const resetRecipeForm = () => {
+    setEditingRecipeId(null);
+    setRecName('');
+    setRecAlias('');
+    setRecMinutes(20);
+    setRecCuisine(cuisines[0] || 'Persian');
+    setRecTools(['air_fryer']);
+    setRecStepsText('');
+    setDraftIngredients([]);
+    setCustomProtein('');
+    setCustomSugar('');
+    setCustomFiber('');
+    setCustomCalories('');
+    setShowCustomNutrition(false);
+    setShowAddRecipe(false);
+  };
+
+  const handleStartEditRecipe = (recipe: MealRecipe) => {
+    setEditingRecipeId(recipe.id);
+    setRecName(recipe.name);
+    setRecAlias(recipe.alias || '');
+    setRecMinutes(recipe.prepMinutes);
+    setRecCuisine(recipe.cuisine);
+    setRecTools(recipe.tools.length > 0 ? recipe.tools : ['pan']);
+    setRecStepsText(recipe.quickSteps.join('\n'));
+    setDraftIngredients(
+      recipe.ingredients.map((ing, idx) => {
+        const inv = ing.itemId ? itemMap.get(ing.itemId) : undefined;
+        return {
+          key: ing.itemId ? `inv-${ing.itemId}` : `edit-${idx}-${ing.name}`,
+          itemId: inv?.id,
+          name: inv?.name ?? ing.name,
+          alias: inv?.alias ?? ing.alias ?? '',
+          portionsNeeded: ing.portionsNeeded,
+          portionLabel: ing.portionLabel || inv?.portionLabel || '1 portion',
+          isNewToInventory: !inv,
+          addToInventory: false,
+          newZone: inv?.zone ?? 'fridge',
+          newRemainingStock: inv?.remainingPortions ?? 0,
+        };
+      })
+    );
+    if (!recipe.nutritionEstimated) {
+      setShowCustomNutrition(true);
+      setCustomProtein(String(recipe.proteinGrams));
+      setCustomSugar(String(recipe.sugarGrams));
+      setCustomFiber(String(recipe.fiberGrams));
+      setCustomCalories(String(recipe.calories));
+    } else {
+      setShowCustomNutrition(false);
+      setCustomProtein('');
+      setCustomSugar('');
+      setCustomFiber('');
+      setCustomCalories('');
+    }
+    setShowAddRecipe(true);
   };
 
   const handleAddRecipeSubmit = (e: React.FormEvent) => {
@@ -456,44 +531,47 @@ export const MealPlannerView: React.FC<MealPlannerViewProps> = ({
       customFiber.trim() === '' &&
       customCalories.trim() === '';
 
-    onAddRecipe(
-      {
-        name: recName.trim(),
-        alias: recAlias.trim() || undefined,
-        cuisine: recCuisine || 'Persian',
-        mealType: 'dinner',
-        prepMinutes: Math.max(5, Number(recMinutes) || 20),
-        effort: recMinutes <= 20 ? 'exhausted' : 'normal',
-        tools: recTools.length > 0 ? recTools : ['pan'],
-        proteinGrams: finalProtein,
-        sugarGrams: finalSugar,
-        fiberGrams: finalFiber,
-        calories: finalCalories,
-        micronutrients:
-          estimatedDraftNutrition.micronutrients.length > 0
-            ? estimatedDraftNutrition.micronutrients
-            : ['Whole Foods'],
-        nutritionHighlight: `${finalProtein}g Protein • ${finalSugar}g Sugar • ${finalCalories} kcal${
-          isAutoEstimated ? ' (Auto-estimated)' : ''
-        }`,
-        nutritionEstimated: isAutoEstimated,
-        ingredients: finalIngredients,
-        quickSteps: ['Prep the selected ingredients and cook using your chosen tool until ready.'],
-        isFavorite: true,
-      },
-      newInventoryItems
-    );
+    const parsedSteps = recStepsText
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean);
 
-    // Reset form
-    setRecName('');
-    setRecAlias('');
-    setDraftIngredients([]);
-    setCustomProtein('');
-    setCustomSugar('');
-    setCustomFiber('');
-    setCustomCalories('');
-    setShowCustomNutrition(false);
-    setShowAddRecipe(false);
+    const existingRecipe = editingRecipeId ? recipeMap.get(editingRecipeId) : undefined;
+    const builtPayload: Omit<MealRecipe, 'id'> = {
+      name: recName.trim(),
+      alias: recAlias.trim() || undefined,
+      cuisine: recCuisine || 'Persian',
+      mealType: existingRecipe?.mealType ?? 'dinner',
+      prepMinutes: Math.max(5, Number(recMinutes) || 20),
+      effort: recMinutes <= 20 ? 'exhausted' : recMinutes >= 45 ? 'batch_prep' : 'normal',
+      tools: recTools.length > 0 ? recTools : ['pan'],
+      proteinGrams: finalProtein,
+      sugarGrams: finalSugar,
+      fiberGrams: finalFiber,
+      calories: finalCalories,
+      micronutrients:
+        estimatedDraftNutrition.micronutrients.length > 0
+          ? estimatedDraftNutrition.micronutrients
+          : ['Whole Foods'],
+      nutritionHighlight: `${finalProtein}g Protein • ${finalSugar}g Sugar • ${finalCalories} kcal${
+        isAutoEstimated ? ' (Auto-estimated)' : ''
+      }`,
+      nutritionEstimated: isAutoEstimated,
+      ingredients: finalIngredients,
+      quickSteps:
+        parsedSteps.length > 0
+          ? parsedSteps
+          : ['Prep the selected ingredients and cook using your chosen tool until ready.'],
+      isFavorite: existingRecipe ? existingRecipe.isFavorite : true,
+    };
+
+    if (existingRecipe) {
+      onUpdateRecipe({ ...builtPayload, id: existingRecipe.id }, newInventoryItems);
+    } else {
+      onAddRecipe(builtPayload, newInventoryItems);
+    }
+
+    resetRecipeForm();
   };
 
   return (
@@ -681,6 +759,127 @@ export const MealPlannerView: React.FC<MealPlannerViewProps> = ({
           </div>
         )}
       </div>
+
+      {/* Ephemeral Gemini AI Ideas Tray (not auto-saved to library!) */}
+      {aiCandidates.length > 0 && (
+        <div className="rounded-3xl border border-indigo-200 bg-gradient-to-br from-indigo-50/70 via-white to-violet-50/50 p-4 sm:p-5 space-y-3 shadow-2xs">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div>
+              <div className="inline-flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-indigo-800">
+                <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
+                Gemini AI Ideas ({aiCandidates.length})
+              </div>
+              <p className="text-[11px] text-stone-500 mt-0.5">
+                Temporary suggestions — only saved to your Food Library if you click Save.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setAiCandidates([])}
+              className="text-xs font-semibold text-stone-500 hover:text-stone-800 px-2.5 py-1 rounded-lg hover:bg-white/80"
+            >
+              Clear Ideas
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {aiCandidates.map((idea) => {
+              const isSaved = Boolean(idea.savedRecipeId);
+              return (
+                <div
+                  key={idea.tempId}
+                  className="rounded-2xl border border-indigo-200/80 bg-white p-4 flex flex-col justify-between gap-3 shadow-2xs"
+                >
+                  <div className="space-y-2">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <h4 dir="auto" className="font-bold text-sm text-stone-900">
+                            {idea.name}
+                          </h4>
+                          <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700">
+                            {idea.cuisine}
+                          </span>
+                        </div>
+                        {idea.alias && (
+                          <div dir="auto" className="text-xs text-teal-800 font-medium mt-0.5">
+                            {idea.alias}
+                          </div>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setAiCandidates((prev) => prev.filter((c) => c.tempId !== idea.tempId))
+                        }
+                        className="p-1 rounded-lg text-stone-400 hover:text-stone-700 hover:bg-stone-100 shrink-0"
+                        aria-label={`Dismiss ${idea.name}`}
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+
+                    {idea.reasonNote && (
+                      <p className="text-[11px] text-indigo-900/80 bg-indigo-50/70 rounded-lg px-2.5 py-1">
+                        {idea.reasonNote}
+                      </p>
+                    )}
+
+                    <div className="flex items-center flex-wrap gap-1.5 text-[11px]">
+                      <span className="font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-md">
+                        {idea.proteinGrams}g Pro
+                      </span>
+                      <span className="font-medium text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded-md">
+                        {idea.sugarGrams}g Sugar
+                      </span>
+                      <span className="text-stone-500">{idea.calories} kcal</span>
+                      <span className="text-stone-400">•</span>
+                      <span className="text-stone-500">{idea.prepMinutes}m</span>
+                    </div>
+
+                    {idea.ingredients.length > 0 && (
+                      <div className="flex flex-wrap gap-1 text-[11px]">
+                        {idea.ingredients.map((ing, idx) => (
+                          <span
+                            key={idx}
+                            className="px-2 py-0.5 rounded-md bg-stone-50 border border-stone-200 text-stone-700"
+                          >
+                            {ing.portionsNeeded}× {ing.name}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex items-center justify-end gap-2 pt-2 border-t border-stone-100">
+                    <button
+                      type="button"
+                      disabled={isSaved}
+                      onClick={() => handleSaveAiIdea(idea)}
+                      className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-bold transition ${
+                        isSaved
+                          ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                          : 'bg-stone-100 hover:bg-stone-200 text-stone-800'
+                      }`}
+                    >
+                      <BookmarkPlus className="w-3.5 h-3.5" />
+                      {isSaved ? 'Saved' : 'Save to Library'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handlePlanAiIdea(idea)}
+                      className="inline-flex items-center gap-1.5 rounded-xl bg-teal-700 hover:bg-teal-800 text-white px-3.5 py-1.5 text-xs font-bold transition"
+                    >
+                      <CalendarPlus className="w-3.5 h-3.5" />
+                      Save &amp; Plan
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Generated Plan (Single Meal OR Multi-Day) */}
       {groupedDays.length > 0 && (
@@ -964,7 +1163,10 @@ export const MealPlannerView: React.FC<MealPlannerViewProps> = ({
             </button>
             <button
               type="button"
-              onClick={() => setShowAddRecipe((v) => !v)}
+              onClick={() => {
+                if (showAddRecipe) resetRecipeForm();
+                else setShowAddRecipe(true);
+              }}
               className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-teal-700 hover:bg-teal-800 text-white px-4 py-2 text-xs font-bold shadow-xs shrink-0"
             >
               <Plus className="w-4 h-4" />
@@ -973,7 +1175,7 @@ export const MealPlannerView: React.FC<MealPlannerViewProps> = ({
           </div>
         </div>
 
-        {/* Add New Meal Form (Custom Cuisine + New Ingredients -> Inventory + Exact Quantities + Auto-Nutrition!) */}
+        {/* Add / Edit Meal Form */}
         {showAddRecipe && (
           <form
             onSubmit={handleAddRecipeSubmit}
@@ -981,14 +1183,16 @@ export const MealPlannerView: React.FC<MealPlannerViewProps> = ({
           >
             <div className="flex items-center justify-between border-b border-stone-100 pb-3">
               <div>
-                <h4 className="text-sm font-bold text-stone-900">Add Meal to Food Library</h4>
+                <h4 className="text-sm font-bold text-stone-900">
+                  {editingRecipeId ? 'Edit Meal' : 'Add Meal to Food Library'}
+                </h4>
                 <p className="text-[11px] text-stone-500">
                   Nutrition is auto-estimated from your ingredients &amp; cooking tool.
                 </p>
               </div>
               <button
                 type="button"
-                onClick={() => setShowAddRecipe(false)}
+                onClick={resetRecipeForm}
                 className="p-1.5 rounded-full hover:bg-stone-100"
               >
                 <X className="w-4 h-4 text-stone-500" />
@@ -1392,10 +1596,25 @@ export const MealPlannerView: React.FC<MealPlannerViewProps> = ({
               )}
             </div>
 
+            {/* Quick Steps (optional) */}
+            <div>
+              <label className="block text-[11px] font-semibold text-stone-600 mb-1">
+                Quick Steps (optional — one step per line)
+              </label>
+              <textarea
+                dir="auto"
+                rows={2}
+                value={recStepsText}
+                onChange={(e) => setRecStepsText(e.target.value)}
+                placeholder="e.g. Season chicken with saffron & lemon&#10;Air fry at 200°C for 14 minutes"
+                className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs leading-relaxed focus:outline-none focus:ring-2 focus:ring-teal-500"
+              />
+            </div>
+
             <div className="flex justify-end gap-2 pt-1">
               <button
                 type="button"
-                onClick={() => setShowAddRecipe(false)}
+                onClick={resetRecipeForm}
                 className="px-4 py-2 rounded-xl text-xs font-semibold text-stone-600 hover:bg-stone-100"
               >
                 Cancel
@@ -1404,7 +1623,7 @@ export const MealPlannerView: React.FC<MealPlannerViewProps> = ({
                 type="submit"
                 className="rounded-xl bg-teal-700 hover:bg-teal-800 text-white px-5 py-2 text-xs font-bold shadow-xs"
               >
-                Save Meal to Library
+                {editingRecipeId ? 'Save Changes' : 'Save Meal to Library'}
               </button>
             </div>
           </form>
@@ -1461,7 +1680,7 @@ export const MealPlannerView: React.FC<MealPlannerViewProps> = ({
           </div>
         </div>
 
-        {/* Food Library Cards — Direct Cook & Deduct */}
+        {/* Food Library Cards — Direct Cook & Deduct + Edit/Delete */}
         {filteredLibrary.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-stone-300 bg-white p-8 text-center text-xs text-stone-500">
             No foods match this filter or search. Try switching back to &ldquo;All&rdquo; or add a new meal!
@@ -1478,6 +1697,7 @@ export const MealPlannerView: React.FC<MealPlannerViewProps> = ({
               }) => {
                 const servings = libraryServings[recipe.id] ?? 2;
                 const showIngs = expandedLibraryId === recipe.id;
+                const confirmingDelete = confirmDeleteRecipeId === recipe.id;
 
                 return (
                   <div
@@ -1488,7 +1708,7 @@ export const MealPlannerView: React.FC<MealPlannerViewProps> = ({
                   >
                     <div className="space-y-2">
                       <div className="flex items-start justify-between gap-2">
-                        <div>
+                        <div className="min-w-0">
                           <div className="flex items-center gap-2 flex-wrap">
                             <h4 dir="auto" className="font-semibold text-sm text-stone-900">
                               {recipe.name}
@@ -1505,17 +1725,60 @@ export const MealPlannerView: React.FC<MealPlannerViewProps> = ({
                             </div>
                           )}
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => onToggleFavorite(recipe.id)}
-                          className={`p-1.5 rounded-full transition ${
-                            recipe.isFavorite
-                              ? 'text-rose-500 bg-rose-50'
-                              : 'text-stone-300 hover:text-rose-400'
-                          }`}
-                        >
-                          <Heart className={`w-4 h-4 ${recipe.isFavorite ? 'fill-current' : ''}`} />
-                        </button>
+                        <div className="flex items-center gap-0.5 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => onToggleFavorite(recipe.id)}
+                            className={`p-1.5 rounded-full transition ${
+                              recipe.isFavorite
+                                ? 'text-rose-500 bg-rose-50'
+                                : 'text-stone-300 hover:text-rose-400'
+                            }`}
+                            title={recipe.isFavorite ? 'Remove favorite' : 'Favorite'}
+                          >
+                            <Heart className={`w-4 h-4 ${recipe.isFavorite ? 'fill-current' : ''}`} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleStartEditRecipe(recipe)}
+                            className="p-1.5 rounded-lg text-stone-400 hover:text-stone-800 hover:bg-stone-100 transition"
+                            title="Edit meal"
+                            aria-label={`Edit ${recipe.name}`}
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                          </button>
+                          {confirmingDelete ? (
+                            <div className="inline-flex items-center gap-1 ml-0.5">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  onDeleteRecipe(recipe.id);
+                                  setConfirmDeleteRecipeId(null);
+                                }}
+                                className="px-2 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-bold"
+                              >
+                                Delete
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setConfirmDeleteRecipeId(null)}
+                                className="px-1.5 py-1 rounded-lg text-[10px] font-semibold text-stone-500 hover:bg-stone-100"
+                              >
+                                No
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDeleteRecipeId(recipe.id)}
+                              className="p-1.5 rounded-lg text-stone-400 hover:text-rose-600 hover:bg-rose-50 transition"
+                              title="Delete meal"
+                              aria-label={`Delete ${recipe.name}`}
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
                       </div>
 
                       <div className="flex items-center flex-wrap gap-1.5 text-[11px]">
