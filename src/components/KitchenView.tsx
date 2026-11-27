@@ -5,6 +5,7 @@ import {
   Camera,
   Check,
   CheckCircle2,
+  ChefHat,
   ChevronDown,
   ChevronRight,
   Clock,
@@ -28,6 +29,7 @@ import {
   TrendingDown,
   User,
   Users,
+  X,
 } from 'lucide-react';
 import {
   EatingMode,
@@ -55,6 +57,7 @@ import {
 } from '../utils/inventoryDisplay';
 import { PRODUCT_CATEGORIES, PRODUCT_CATEGORY_ORDER } from '../utils/productCategories';
 import { ProposedInventoryUpdate } from '../utils/voiceInventoryParser';
+import { buildQuietContextualAlert } from '../utils/personalInsights';
 import { CategoryIcon } from './CategoryIcon';
 
 const ItemModal = lazy(() =>
@@ -101,6 +104,7 @@ interface KitchenViewProps {
   onDeleteItem: (itemId: string) => void;
   onOpenReceiptScanner: () => void;
   onOpenShoppingTab?: () => void;
+  onCookExpiringItems?: (itemIds: string[]) => void;
 }
 
 const ZONE_ICONS: Record<StorageZone, React.ReactNode> = {
@@ -319,6 +323,7 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
   onDeleteItem,
   onOpenReceiptScanner,
   onOpenShoppingTab,
+  onCookExpiringItems,
 }) => {
   const [zoneFilter, setZoneFilter] = useState<'all' | StorageZone>('all');
   const [categoryFilter, setCategoryFilter] = useState<'all' | FoodCategory>('all');
@@ -329,11 +334,41 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
   const [search, setSearch] = useState('');
   const [showPantryStarter, setShowPantryStarter] = useState(false);
   const [showVoiceModal, setShowVoiceModal] = useState(false);
+  const [dismissedAlertKey, setDismissedAlertKey] = useState<string>(() => {
+    try {
+      return localStorage.getItem('kitchenflow_dismissed_alert_v1') || '';
+    } catch {
+      return '';
+    }
+  });
   const [modalState, setModalState] = useState<{
     item: InventoryItem | null;
     initialTab: 'basics' | 'nutrition';
     initialCategory?: FoodCategory;
   } | null>(null);
+
+  const quietAlert = useMemo(
+    () =>
+      buildQuietContextualAlert({
+        items,
+        shoppingList,
+        stores,
+        shoppingDay,
+      }),
+    [items, shoppingList, stores, shoppingDay]
+  );
+
+  const visibleQuietAlert =
+    quietAlert && quietAlert.key !== dismissedAlertKey ? quietAlert : null;
+
+  const dismissQuietAlert = (key: string) => {
+    setDismissedAlertKey(key);
+    try {
+      localStorage.setItem('kitchenflow_dismissed_alert_v1', key);
+    } catch {
+      // ignore
+    }
+  };
 
   const isDetailed = uiMode === 'detailed';
   const servingMultiplier =
@@ -927,6 +962,53 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
 
   return (
     <div className="space-y-3">
+      {/* Quiet, Useful-Only Contextual Alert (≤48h expiring OR Shopping Day with essentials) */}
+      {visibleQuietAlert && (
+        <div
+          className={`rounded-2xl border px-3.5 py-2.5 flex items-center justify-between gap-3 shadow-2xs ${
+            visibleQuietAlert.type === 'expiring'
+              ? 'bg-amber-50/85 border-amber-200/90 text-amber-950'
+              : 'bg-teal-50/85 border-teal-200/90 text-teal-950'
+          }`}
+        >
+          <div className="min-w-0">
+            <div className="text-xs font-bold leading-snug">{visibleQuietAlert.headline}</div>
+            <div className="text-[11px] opacity-80 leading-snug">{visibleQuietAlert.subtext}</div>
+          </div>
+          <div className="flex items-center gap-1.5 shrink-0">
+            {visibleQuietAlert.type === 'expiring' && onCookExpiringItems && (
+              <button
+                type="button"
+                onClick={() => onCookExpiringItems(visibleQuietAlert.itemIds)}
+                className="inline-flex items-center gap-1 rounded-xl bg-amber-600 hover:bg-amber-700 text-white px-2.5 py-1.5 text-[11px] font-bold transition"
+              >
+                <ChefHat className="w-3.5 h-3.5" />
+                Cook with it
+              </button>
+            )}
+            {visibleQuietAlert.type === 'shopping_day' && onOpenShoppingTab && (
+              <button
+                type="button"
+                onClick={onOpenShoppingTab}
+                className="inline-flex items-center gap-1 rounded-xl bg-teal-700 hover:bg-teal-800 text-white px-2.5 py-1.5 text-[11px] font-bold transition"
+              >
+                <ShoppingCart className="w-3.5 h-3.5" />
+                Open List
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => dismissQuietAlert(visibleQuietAlert.key)}
+              className="p-1 rounded-lg opacity-60 hover:opacity-100 hover:bg-black/5 transition"
+              title="Dismiss for today"
+              aria-label="Dismiss reminder for today"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Compact Kitchen Pulse + Serving Multiplier Bar (reclaims mobile above-the-fold space) */}
       <div className="rounded-2xl border border-stone-200/90 bg-white px-3 py-2 shadow-2xs flex flex-wrap items-center justify-between gap-2">
         {/* Tappable Kitchen Pulse Summary */}

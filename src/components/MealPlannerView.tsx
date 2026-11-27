@@ -1,4 +1,4 @@
-import React, { Suspense, lazy, useMemo, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useMemo, useState } from 'react';
 import {
   BookmarkPlus,
   CalendarPlus,
@@ -33,6 +33,7 @@ import {
   StorageZone,
   Store,
   UIMode,
+  UsageEvent,
 } from '../types/kitchen';
 import { EFFORT_META, TOOL_META, UI_LABELS, ZONE_META } from '../i18n/translations';
 import { computeItemForecast } from '../utils/forecasting';
@@ -43,6 +44,7 @@ import {
 } from '../utils/mealEngine';
 import { generateMealsWithGemini } from '../services/geminiEdge';
 import { getCategoryProfile, inferProductDefaultsFromText } from '../utils/productCategories';
+import { computeTodaysPlate } from '../utils/personalInsights';
 
 const VoiceFoodModal = lazy(() =>
   import('./VoiceFoodModal').then((m) => ({ default: m.VoiceFoodModal }))
@@ -53,16 +55,20 @@ interface MealPlannerViewProps {
   stores: Store[];
   recipes: MealRecipe[];
   weeklyPlan: PlannedMeal[];
+  events?: UsageEvent[];
   cuisines: string[];
   defaultTools: CookingTool[];
   dailyProteinTarget: number;
   dailySugarLimit: number;
   shoppingDay: number;
   uiMode: UIMode;
+  preselectedMustUseIds?: string[];
+  onConsumePreselectedMustUse?: () => void;
   onSetWeeklyPlan: (plan: PlannedMeal[]) => void;
   onUpdateMealServings: (plannedMealId: string, servings: number) => void;
   onMarkMealCooked: (plannedMealId: string, deductInventory: boolean) => void;
   onCookRecipeDirect: (recipeId: string, servings: number) => void;
+  onSaveLeftovers?: (recipeId: string, portions?: number) => void;
   onAddRecipe: (
     recipe: Omit<MealRecipe, 'id'> & { id?: string },
     newInventoryItems?: InventoryItem[]
@@ -109,16 +115,20 @@ export const MealPlannerView: React.FC<MealPlannerViewProps> = ({
   stores,
   recipes,
   weeklyPlan,
+  events = [],
   cuisines,
   defaultTools,
   dailyProteinTarget,
   dailySugarLimit,
   shoppingDay,
   uiMode,
+  preselectedMustUseIds,
+  onConsumePreselectedMustUse,
   onSetWeeklyPlan,
   onUpdateMealServings,
   onMarkMealCooked,
   onCookRecipeDirect,
+  onSaveLeftovers,
   onAddRecipe,
   onUpdateRecipe,
   onDeleteRecipe,
@@ -134,6 +144,24 @@ export const MealPlannerView: React.FC<MealPlannerViewProps> = ({
   const [selectedTools, setSelectedTools] = useState<CookingTool[]>(defaultTools);
   const [cuisineFilter, setCuisineFilter] = useState<string>('all');
   const [ingredientPrefs, setIngredientPrefs] = useState<Record<string, 'must' | 'exclude'>>({});
+
+  useEffect(() => {
+    if (preselectedMustUseIds && preselectedMustUseIds.length > 0) {
+      setIngredientPrefs((prev) => {
+        const next = { ...prev };
+        for (const id of preselectedMustUseIds) {
+          next[id] = 'must';
+        }
+        return next;
+      });
+      onConsumePreselectedMustUse?.();
+    }
+  }, [preselectedMustUseIds, onConsumePreselectedMustUse]);
+
+  const todaysPlate = useMemo(
+    () => computeTodaysPlate(events, items),
+    [events, items]
+  );
   const [expandedRecipeId, setExpandedRecipeId] = useState<string | null>(null);
   const [isCallingGemini, setIsCallingGemini] = useState(false);
   const [geminiNotice, setGeminiNotice] = useState<string | null>(null);
@@ -577,8 +605,70 @@ export const MealPlannerView: React.FC<MealPlannerViewProps> = ({
     resetRecipeForm();
   };
 
+  const proteinPct = Math.min(
+    100,
+    Math.round((todaysPlate.protein / Math.max(1, dailyProteinTarget)) * 100)
+  );
+  const sugarPct = Math.min(
+    100,
+    Math.round((todaysPlate.sugar / Math.max(1, dailySugarLimit)) * 100)
+  );
+
   return (
     <div className="space-y-6">
+      {/* Gentle Today's Plate Strip (Calm & Non-Guilt, visible in Detailed mode or when items logged today) */}
+      {(isDetailed || todaysPlate.loggedCount > 0) && (
+        <div className="rounded-2xl border border-stone-200/90 bg-white px-4 py-3 shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-8 h-8 rounded-xl bg-indigo-50 text-indigo-700 flex items-center justify-center shrink-0">
+              <Utensils className="w-4 h-4" />
+            </div>
+            <div className="min-w-0">
+              <div className="text-xs font-bold text-stone-900">Today&apos;s Plate</div>
+              <div className="text-[11px] text-stone-500">
+                {todaysPlate.loggedCount > 0
+                  ? `${todaysPlate.calories} kcal • ${todaysPlate.fiber}g fiber from today’s logged kitchen portions`
+                  : 'Log portions or cook a meal to see today’s protein & sugar estimate'}
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-4 shrink-0 flex-wrap">
+            <div className="min-w-[115px] space-y-1">
+              <div className="flex items-center justify-between text-[11px]">
+                <span className="font-semibold text-indigo-800">Protein</span>
+                <span className="font-bold text-stone-800">
+                  {todaysPlate.protein}g / {dailyProteinTarget}g
+                </span>
+              </div>
+              <div className="h-1.5 rounded-full bg-stone-100 overflow-hidden">
+                <div
+                  className="h-full rounded-full bg-indigo-600 transition-all"
+                  style={{ width: `${proteinPct}%` }}
+                />
+              </div>
+            </div>
+
+            <div className="min-w-[110px] space-y-1">
+              <div className="flex items-center justify-between text-[11px]">
+                <span className="font-semibold text-stone-600">Sugar</span>
+                <span className="font-bold text-stone-700">
+                  {todaysPlate.sugar}g / {dailySugarLimit}g
+                </span>
+              </div>
+              <div className="h-1.5 rounded-full bg-stone-100 overflow-hidden">
+                <div
+                  className={`h-full rounded-full transition-all ${
+                    todaysPlate.sugar > dailySugarLimit ? 'bg-amber-500' : 'bg-teal-600'
+                  }`}
+                  style={{ width: `${sugarPct}%` }}
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Interactive Planner Controls */}
       <div className="rounded-3xl border border-stone-200 bg-white p-5 shadow-xs space-y-5">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -1116,20 +1206,36 @@ export const MealPlannerView: React.FC<MealPlannerViewProps> = ({
                               {isExpanded ? 'Hide steps' : 'Quick steps'}
                             </button>
 
-                            <button
-                              type="button"
-                              onClick={() => onMarkMealCooked(meal.id, !meal.cooked)}
-                              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition ${
-                                meal.cooked
-                                  ? 'bg-emerald-100 text-emerald-800'
-                                  : 'bg-stone-900 hover:bg-stone-800 text-white'
-                              }`}
-                            >
-                              <CheckCircle2 className="w-3.5 h-3.5" />
-                              {meal.cooked
-                                ? UI_LABELS.cookedDone
-                                : `${UI_LABELS.cookedBtn} (${servings}×)`}
-                            </button>
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              {meal.cooked && onSaveLeftovers && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    onSaveLeftovers(rec.id, Math.max(1, Math.ceil(servings / 2)))
+                                  }
+                                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-[11px] font-semibold bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200 transition"
+                                  title="Save remaining portions to Fridge with +3d freshness"
+                                >
+                                  <PackageCheck className="w-3.5 h-3.5" />
+                                  Save leftovers (+3d)
+                                </button>
+                              )}
+
+                              <button
+                                type="button"
+                                onClick={() => onMarkMealCooked(meal.id, !meal.cooked)}
+                                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition ${
+                                  meal.cooked
+                                    ? 'bg-emerald-100 text-emerald-800'
+                                    : 'bg-stone-900 hover:bg-stone-800 text-white'
+                                }`}
+                              >
+                                <CheckCircle2 className="w-3.5 h-3.5" />
+                                {meal.cooked
+                                  ? UI_LABELS.cookedDone
+                                  : `${UI_LABELS.cookedBtn} (${servings}×)`}
+                              </button>
+                            </div>
                           </div>
                         </div>
                       );

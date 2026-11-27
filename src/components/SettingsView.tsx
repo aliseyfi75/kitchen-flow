@@ -1,8 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Activity,
+  Bell,
   ChevronDown,
   ChevronRight,
+  History,
   PlayCircle,
   Plus,
   Receipt,
@@ -11,7 +13,7 @@ import {
   Store as StoreIcon,
   Trash2,
 } from 'lucide-react';
-import { HouseholdSettings, InventoryItem, Store, TripReceipt } from '../types/kitchen';
+import { HouseholdSettings, InventoryItem, Store, TripReceipt, UsageEvent } from '../types/kitchen';
 import { computeItemForecast, formatShoppingDayName } from '../utils/forecasting';
 import { UI_LABELS } from '../i18n/translations';
 import { formatItemStockSummary } from '../utils/inventoryDisplay';
@@ -20,10 +22,12 @@ import {
   computeStoreSpendSummary,
   formatCurrency,
 } from '../utils/priceInsights';
+import { computeHouseholdActivitySummary } from '../utils/personalInsights';
 
 interface SettingsViewProps {
   items: InventoryItem[];
   stores: Store[];
+  events?: UsageEvent[];
   tripReceipts?: TripReceipt[];
   settings: HouseholdSettings;
   onUpdateSettings: (patch: Partial<HouseholdSettings>) => void;
@@ -170,6 +174,7 @@ const STORE_COLORS = ['#DC2626', '#2563EB', '#0F766E', '#D97706', '#7C3AED', '#D
 export const SettingsView: React.FC<SettingsViewProps> = ({
   items,
   stores,
+  events = [],
   tripReceipts = [],
   settings,
   onUpdateSettings,
@@ -186,6 +191,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [confirmDeleteStoreId, setConfirmDeleteStoreId] = useState<string | null>(null);
   const [rhythmSearch, setRhythmSearch] = useState('');
   const [spendExpanded, setSpendExpanded] = useState(false);
+  const [activityExpanded, setActivityExpanded] = useState(false);
+  const [reminderHint, setReminderHint] = useState<string | null>(null);
 
   const spendSummary = useMemo(
     () => computeStoreSpendSummary(tripReceipts, stores, 30),
@@ -195,11 +202,45 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     () => computeMultiStorePriceComparisons(items, stores),
     [items, stores]
   );
+  const activitySummary = useMemo(
+    () => computeHouseholdActivitySummary(events, items, stores, 30),
+    [events, items, stores]
+  );
   const pricedItemsCount = useMemo(
     () => items.filter((i) => typeof i.lastPrice === 'number' && i.lastPrice > 0).length,
     [items]
   );
   const storeMap = useMemo(() => new Map(stores.map((s) => [s.id, s])), [stores]);
+
+  const handleToggleBrowserReminders = async () => {
+    setReminderHint(null);
+    if (settings.browserRemindersEnabled) {
+      onUpdateSettings({ browserRemindersEnabled: false });
+      return;
+    }
+    if (typeof window === 'undefined' || !('Notification' in window)) {
+      setReminderHint('Browser notifications are not supported on this device.');
+      return;
+    }
+    if (Notification.permission === 'granted') {
+      onUpdateSettings({ browserRemindersEnabled: true });
+      return;
+    }
+    if (Notification.permission === 'denied') {
+      setReminderHint('Notifications are blocked in your browser settings for this site.');
+      return;
+    }
+    try {
+      const result = await Notification.requestPermission();
+      if (result === 'granted') {
+        onUpdateSettings({ browserRemindersEnabled: true });
+      } else {
+        setReminderHint('Permission was not granted — keeping reminders off.');
+      }
+    } catch {
+      setReminderHint('Could not request notification permission on this browser.');
+    }
+  };
 
   const filteredRhythmItems = useMemo(() => {
     const q = rhythmSearch.trim().toLowerCase();
@@ -327,6 +368,40 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               </div>
             </div>
           </div>
+        </div>
+
+        {/* Quiet Optional Browser Reminders (Off by Default) */}
+        <div className="rounded-2xl bg-stone-50 border border-stone-200/80 px-3.5 py-3 flex items-center justify-between gap-3">
+          <div className="flex items-start gap-2.5 min-w-0">
+            <Bell className="w-4 h-4 text-teal-700 mt-0.5 shrink-0" />
+            <div className="min-w-0">
+              <div className="text-xs font-semibold text-stone-800">
+                Quiet Browser Alerts (Optional, max 1/day)
+              </div>
+              <p className="text-[11px] text-stone-500">
+                Only notifies when an item expires within 48h or on Shopping Day with essentials waiting.
+              </p>
+              {reminderHint && (
+                <p className="text-[11px] text-amber-700 font-medium mt-1">{reminderHint}</p>
+              )}
+            </div>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={Boolean(settings.browserRemindersEnabled)}
+            onClick={() => void handleToggleBrowserReminders()}
+            className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition ${
+              settings.browserRemindersEnabled ? 'bg-teal-700' : 'bg-stone-300'
+            }`}
+            aria-label="Toggle quiet browser reminders"
+          >
+            <span
+              className={`inline-block h-4.5 w-4.5 transform rounded-full bg-white shadow-xs transition ${
+                settings.browserRemindersEnabled ? 'translate-x-5.5' : 'translate-x-1'
+              }`}
+            />
+          </button>
         </div>
       </div>
 
@@ -645,6 +720,137 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     );
                   })}
                 </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Household Activity Feed & Waste-Saved Summary (Calm, Collapsed by Default) */}
+      <div className="rounded-3xl border border-stone-200 bg-white overflow-hidden shadow-2xs">
+        <button
+          type="button"
+          onClick={() => setActivityExpanded((v) => !v)}
+          className="w-full px-5 py-4 flex items-center justify-between gap-3 hover:bg-stone-50/80 transition text-left"
+        >
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-9 h-9 rounded-2xl bg-indigo-50 text-indigo-700 flex items-center justify-center shrink-0">
+              <History className="w-4.5 h-4.5" />
+            </div>
+            <div className="min-w-0">
+              <h3 className="font-bold text-stone-900 text-sm">
+                Household Activity &amp; Waste Saved
+              </h3>
+              <p className="text-[11px] text-stone-500 truncate">
+                {activitySummary.recentRows.length > 0
+                  ? `${activitySummary.usesCount} use(s) • ${activitySummary.restocksCount} restock(s)${
+                      activitySummary.rescuedBeforeExpiryCount > 0
+                        ? ` • ${activitySummary.rescuedBeforeExpiryCount} item(s) used before expiry`
+                        : ''
+                    } in last 30 days`
+                  : 'Recent kitchen logs and partner activity will appear here'}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            {activitySummary.rescuedBeforeExpiryCount > 0 && (
+              <span className="hidden sm:inline-flex px-2.5 py-1 rounded-full bg-teal-50 text-teal-800 border border-teal-200 text-xs font-bold">
+                {activitySummary.rescuedBeforeExpiryCount} rescued
+              </span>
+            )}
+            {activityExpanded ? (
+              <ChevronDown className="w-4 h-4 text-stone-400" />
+            ) : (
+              <ChevronRight className="w-4 h-4 text-stone-400" />
+            )}
+          </div>
+        </button>
+
+        {activityExpanded && (
+          <div className="px-5 pb-5 pt-2 border-t border-stone-100 space-y-4">
+            {/* Quiet 30-day summary row */}
+            <div className="grid grid-cols-3 gap-2">
+              <div className="rounded-2xl bg-stone-50 border border-stone-200/80 p-3 text-center">
+                <div className="text-lg font-bold text-teal-800">
+                  {activitySummary.rescuedBeforeExpiryCount}
+                </div>
+                <div className="text-[10px] font-semibold text-stone-500">
+                  Used before expiry
+                </div>
+              </div>
+              <div className="rounded-2xl bg-stone-50 border border-stone-200/80 p-3 text-center">
+                <div className="text-lg font-bold text-stone-900">
+                  {activitySummary.usesCount}
+                </div>
+                <div className="text-[10px] font-semibold text-stone-500">
+                  Portions logged (30d)
+                </div>
+              </div>
+              <div className="rounded-2xl bg-stone-50 border border-stone-200/80 p-3 text-center">
+                <div className="text-lg font-bold text-emerald-700">
+                  {activitySummary.restocksCount}
+                </div>
+                <div className="text-[10px] font-semibold text-stone-500">
+                  Restocks (30d)
+                </div>
+              </div>
+            </div>
+
+            {activitySummary.topUsedItems.length > 0 && (
+              <div className="flex items-center gap-1.5 flex-wrap text-[11px]">
+                <span className="font-semibold text-stone-500 mr-1">Most used (30d):</span>
+                {activitySummary.topUsedItems.map((it) => (
+                  <span
+                    key={it.itemId}
+                    className="px-2 py-0.5 rounded-full bg-stone-100 text-stone-700 font-medium"
+                  >
+                    {it.name} ({it.count})
+                  </span>
+                ))}
+              </div>
+            )}
+
+            {/* Shared Activity Log */}
+            {activitySummary.recentRows.length === 0 ? (
+              <div className="rounded-2xl bg-stone-50 border border-dashed border-stone-200 p-4 text-xs text-stone-500">
+                No recent kitchen activity yet.
+              </div>
+            ) : (
+              <div className="divide-y divide-stone-100 rounded-2xl border border-stone-200/80 overflow-hidden max-h-72 overflow-y-auto">
+                {activitySummary.recentRows.map((row) => (
+                  <div
+                    key={row.id}
+                    className="px-3.5 py-2.5 bg-white flex items-center justify-between gap-2 text-xs"
+                  >
+                    <div className="min-w-0 flex items-center gap-2">
+                      <span className="px-1.5 py-0.5 rounded-md bg-stone-100 text-stone-700 font-bold text-[10px] shrink-0">
+                        {row.actor}
+                      </span>
+                      <span className="text-stone-600 truncate">
+                        <span
+                          className={`font-semibold ${
+                            row.tone === 'emerald'
+                              ? 'text-emerald-700'
+                              : row.tone === 'amber'
+                              ? 'text-amber-700'
+                              : row.tone === 'teal'
+                              ? 'text-teal-800'
+                              : 'text-stone-700'
+                          }`}
+                        >
+                          {row.actionText}
+                        </span>{' '}
+                        <strong dir="auto" className="text-stone-900">
+                          {row.itemName}
+                        </strong>
+                      </span>
+                    </div>
+                    <span className="text-[10px] font-medium text-stone-400 shrink-0">
+                      {row.relativeTime}
+                    </span>
+                  </div>
+                ))}
               </div>
             )}
           </div>
