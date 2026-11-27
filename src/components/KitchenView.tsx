@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   Archive,
@@ -52,7 +52,10 @@ import {
 } from '../utils/inventoryDisplay';
 import { PRODUCT_CATEGORIES, PRODUCT_CATEGORY_ORDER } from '../utils/productCategories';
 import { CategoryIcon } from './CategoryIcon';
-import { ItemModal } from './ItemModal';
+
+const ItemModal = lazy(() =>
+  import('./ItemModal').then((m) => ({ default: m.ItemModal }))
+);
 
 type KitchenGroupMode = 'category' | 'urgency';
 const GROUP_MODE_STORAGE_KEY = 'kitchenflow_kitchen_group_mode_v1';
@@ -1193,15 +1196,17 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
       )}
 
       {modalState && (
-        <ItemModal
-          item={modalState.item}
-          initialTab={modalState.initialTab}
-          initialCategory={modalState.initialCategory}
-          stores={stores}
-          onClose={() => setModalState(null)}
-          onSave={onSaveItem}
-          onDelete={onDeleteItem}
-        />
+        <Suspense fallback={null}>
+          <ItemModal
+            item={modalState.item}
+            initialTab={modalState.initialTab}
+            initialCategory={modalState.initialCategory}
+            stores={stores}
+            onClose={() => setModalState(null)}
+            onSave={onSaveItem}
+            onDelete={onDeleteItem}
+          />
+        </Suspense>
       )}
     </div>
   );

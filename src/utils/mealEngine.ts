@@ -377,38 +377,3 @@ export function generateSmartWeeklyPlan(
 
   return plan;
 }
-
-export function buildGeminiPromptPreview(
-  items: InventoryItem[],
-  request: MealPlanRequest
-): string {
-  const stocked = items
-    .filter((i) => i.remainingPortions > 0 && !request.excludedItemIds.includes(i.id))
-    .map((i) => ({
-      name: `${i.name}${i.alias ? ` (${i.alias})` : ''}`,
-      zone: i.zone,
-      remaining: `${i.remainingPortions} x ${i.portionLabel}`,
-      proteinPerPortion: `${i.proteinPerPortion}g`,
-      sugarPerPortion: `${i.nutrition?.sugar ?? 0}g`,
-      mustUse: request.mustUseItemIds.includes(i.id),
-      expiresAt: i.expiresAt ?? null,
-    }));
-
-  return JSON.stringify(
-    {
-      endpoint: 'POST /functions/v1/gemini-meal-planner (Supabase Edge Function)',
-      auth: 'Bearer <Authenticated Household Member JWT>',
-      preferences: {
-        scope: request.days === 0 ? 'single_meal' : `${request.days}_days`,
-        effort: request.effort,
-        tools: request.selectedTools,
-        dailyProteinTargetGrams: request.dailyProteinTarget,
-        cuisine: request.cuisineFilter,
-        bilingualOutput: 'English + Persian alias',
-      },
-      stockedInventory: stocked,
-    },
-    null,
-    2
-  );
-}

@@ -9,11 +9,50 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
-};
+const DEFAULT_ALLOWED_ORIGINS = [
+  'https://aliseyfi75.github.io',
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+  'http://localhost:4173',
+  'http://127.0.0.1:4173',
+];
+
+const MAX_BODY_BYTES = 8 * 1024 * 1024; // 8 MB max (photos + short audio clips)
+const RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000; // 10 minutes
+const RATE_LIMIT_MAX_REQUESTS = 30;
+const userRequestLog = new Map<string, number[]>();
+
+function getCorsHeaders(req: Request): Record<string, string> {
+  const origin = req.headers.get('Origin') || '';
+  const extraOrigins = (Deno.env.get('ALLOWED_ORIGINS') || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const allowed = new Set([...DEFAULT_ALLOWED_ORIGINS, ...extraOrigins]);
+  const matchedOrigin = allowed.has(origin) ? origin : DEFAULT_ALLOWED_ORIGINS[0];
+
+  return {
+    'Access-Control-Allow-Origin': matchedOrigin,
+    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    Vary: 'Origin',
+  };
+}
+
+function checkRateLimit(userId: string): { allowed: boolean; retryAfterSec?: number } {
+  const now = Date.now();
+  const cutoff = now - RATE_LIMIT_WINDOW_MS;
+  const recent = (userRequestLog.get(userId) || []).filter((ts) => ts >= cutoff);
+  if (recent.length >= RATE_LIMIT_MAX_REQUESTS) {
+    const oldest = recent[0];
+    const retryAfterSec = Math.max(1, Math.ceil((oldest + RATE_LIMIT_WINDOW_MS - now) / 1000));
+    userRequestLog.set(userId, recent);
+    return { allowed: false, retryAfterSec };
+  }
+  recent.push(now);
+  userRequestLog.set(userId, recent);
+  return { allowed: true };
+}
 
 // Cost-optimized model ladder (Nov 2026):
 // 1. gemini-3.1-flash-lite ($0.25/$1.50 per 1M, Free Tier) — cheapest GA multimodal model open to all accounts
@@ -104,11 +143,20 @@ async function callGemini(apiKey: string, parts: unknown[], systemInstruction: s
 }
 
 Deno.serve(async (req: Request) => {
+  const corsHeaders = getCorsHeaders(req);
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
   }
 
   try {
+    const contentLength = Number(req.headers.get('content-length') || 0);
+    if (contentLength > MAX_BODY_BYTES) {
+      return new Response(
+        JSON.stringify({ error: 'Payload too large (max 8 MB). Please use a smaller photo or shorter voice clip.' }),
+        { status: 413, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
     const authHeader = req.headers.get('Authorization');
     if (!authHeader) {
       return new Response(JSON.stringify({ error: 'Missing Authorization header' }), {
@@ -159,7 +207,32 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    const body = await req.json();
+    // Per-user rate limit guard
+    const rate = checkRateLimit(user.id);
+    if (!rate.allowed) {
+      return new Response(
+        JSON.stringify({
+          error: `Rate limit reached — please wait ${rate.retryAfterSec}s before trying again.`,
+        }),
+        {
+          status: 429,
+          headers: {
+            ...corsHeaders,
+            'Content-Type': 'application/json',
+            'Retry-After': String(rate.retryAfterSec || 60),
+          },
+        }
+      );
+    }
+
+    const rawTextBody = await req.text();
+    if (rawTextBody.length > MAX_BODY_BYTES) {
+      return new Response(
+        JSON.stringify({ error: 'Payload too large (max 8 MB).' }),
+        { status: 413, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+    const body = JSON.parse(rawTextBody);
     const action = body?.action;
 
     if (action === 'scan_receipt') {

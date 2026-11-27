@@ -221,6 +221,12 @@ export const ItemModal: React.FC<ItemModalProps> = ({
     };
   }, []);
 
+  useEffect(() => {
+    return () => {
+      if (labelPreviewUrl) URL.revokeObjectURL(labelPreviewUrl);
+    };
+  }, [labelPreviewUrl]);
+
   /** Applies category-tailored smart defaults (tracking style, presets, shelf life, zone). */
   const applyCategoryDefaults = (nextCat: FoodCategory, forceZoneAndMode = true) => {
     const prof = getCategoryProfile(nextCat);

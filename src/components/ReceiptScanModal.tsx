@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Camera,
   Check,
@@ -43,11 +43,20 @@ export const ReceiptScanModal: React.FC<ReceiptScanModalProps> = ({
   const [activeReceiptTitle, setActiveReceiptTitle] = useState<string>('');
   const [scanError, setScanError] = useState<string | null>(null);
 
+  useEffect(() => {
+    return () => {
+      if (imagePreviewUrl) URL.revokeObjectURL(imagePreviewUrl);
+    };
+  }, [imagePreviewUrl]);
+
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     const url = URL.createObjectURL(file);
-    setImagePreviewUrl(url);
+    setImagePreviewUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return url;
+    });
     setIsScanning(true);
     setScanError(null);
     setActiveReceiptTitle(file.name);

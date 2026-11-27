@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { Suspense, lazy, useMemo, useState } from 'react';
 import {
   BookmarkPlus,
   CalendarPlus,
@@ -43,7 +43,10 @@ import {
 } from '../utils/mealEngine';
 import { generateMealsWithGemini } from '../services/geminiEdge';
 import { getCategoryProfile, inferProductDefaultsFromText } from '../utils/productCategories';
-import { VoiceFoodModal } from './VoiceFoodModal';
+
+const VoiceFoodModal = lazy(() =>
+  import('./VoiceFoodModal').then((m) => ({ default: m.VoiceFoodModal }))
+);
 
 interface MealPlannerViewProps {
   items: InventoryItem[];
@@ -1896,15 +1899,17 @@ export const MealPlannerView: React.FC<MealPlannerViewProps> = ({
       </div>
 
       {showVoiceModal && (
-        <VoiceFoodModal
-          items={items}
-          stores={stores}
-          cuisines={cuisines}
-          onClose={() => setShowVoiceModal(false)}
-          onConfirmSave={(recipe, newInventoryItems) => {
-            onAddRecipe(recipe, newInventoryItems);
-          }}
-        />
+        <Suspense fallback={null}>
+          <VoiceFoodModal
+            items={items}
+            stores={stores}
+            cuisines={cuisines}
+            onClose={() => setShowVoiceModal(false)}
+            onConfirmSave={(recipe, newInventoryItems) => {
+              onAddRecipe(recipe, newInventoryItems);
+            }}
+          />
+        </Suspense>
       )}
     </div>
   );
