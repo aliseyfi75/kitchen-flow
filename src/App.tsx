@@ -1,4 +1,4 @@
-import React, { Suspense, lazy, useEffect, useMemo, useState } from 'react';
+import React, { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ChefHat,
   Cloud,
@@ -18,6 +18,7 @@ import { KitchenView } from './components/KitchenView';
 import { AuthGate } from './components/AuthGate';
 import { FeatureTour, TOUR_STEPS } from './components/FeatureTour';
 import { createTourDemoState } from './data/tourDemoData';
+import { buildQuietContextualAlert } from './utils/personalInsights';
 
 const ShoppingView = lazy(() =>
   import('./components/ShoppingView').then((m) => ({ default: m.ShoppingView }))
@@ -70,6 +71,8 @@ export function App() {
 
   const [activeTab, setActiveTab] = useState<TabId>('kitchen');
   const [showReceiptScanner, setShowReceiptScanner] = useState(false);
+  const [preselectedMustUseIds, setPreselectedMustUseIds] = useState<string[]>([]);
+  const clearPreselectedMustUse = useCallback(() => setPreselectedMustUseIds([]), []);
 
   // Interactive Guided Tour (uses completely isolated in-memory sample data — never modifies real data)
   const [tourStep, setTourStep] = useState<number | null>(null);
@@ -100,6 +103,41 @@ export function App() {
     document.documentElement.dir = 'ltr';
     document.documentElement.lang = 'en';
   }, []);
+
+  // Quiet, strictly opt-in browser notification (max 1 per calendar day when genuinely needed)
+  useEffect(() => {
+    if (!isAuthenticatedOrLocal || tourStep !== null) return;
+    if (!realState.settings.browserRemindersEnabled) return;
+    if (typeof window === 'undefined' || !('Notification' in window)) return;
+    if (Notification.permission !== 'granted') return;
+
+    const alert = buildQuietContextualAlert({
+      items: realState.items,
+      shoppingList: realState.shoppingList,
+      stores: realState.stores,
+      shoppingDay: realState.settings.shoppingDay,
+    });
+    if (!alert) return;
+
+    try {
+      const sentKey = 'kitchenflow_notified_alert_v1';
+      if (localStorage.getItem(sentKey) === alert.key) return;
+      localStorage.setItem(sentKey, alert.key);
+      new Notification('KitchenFlow', {
+        body: `${alert.headline}. ${alert.subtext}`,
+      });
+    } catch {
+      // Ignore notification errors in restricted browser contexts
+    }
+  }, [
+    isAuthenticatedOrLocal,
+    tourStep,
+    realState.settings.browserRemindersEnabled,
+    realState.settings.shoppingDay,
+    realState.items,
+    realState.shoppingList,
+    realState.stores,
+  ]);
 
   if (auth.mode === 'cloud' && (auth.loading || !auth.session || !auth.member)) {
     return (
@@ -327,6 +365,10 @@ export function App() {
               isTourActive ? tourReadOnlyNotice() : setShowReceiptScanner(true)
             }
             onOpenShoppingTab={() => setActiveTab('shopping')}
+            onCookExpiringItems={(itemIds) => {
+              setPreselectedMustUseIds(itemIds);
+              setActiveTab('meals');
+            }}
           />
         )}
 
@@ -362,16 +404,20 @@ export function App() {
               stores={activeState.stores}
               recipes={activeState.recipes}
               weeklyPlan={activeState.weeklyPlan}
+              events={activeState.events}
               cuisines={activeState.settings.cuisines}
               defaultTools={activeState.settings.defaultTools}
               dailyProteinTarget={activeState.settings.dailyProteinTarget}
               dailySugarLimit={activeState.settings.dailySugarLimit}
               shoppingDay={activeState.settings.shoppingDay}
               uiMode={uiMode}
+              preselectedMustUseIds={preselectedMustUseIds}
+              onConsumePreselectedMustUse={clearPreselectedMustUse}
               onSetWeeklyPlan={isTourActive ? tourReadOnlyNotice : store.setWeeklyPlan}
               onUpdateMealServings={isTourActive ? tourReadOnlyNotice : store.updatePlannedMealServings}
               onMarkMealCooked={isTourActive ? tourReadOnlyNotice : store.markMealCooked}
               onCookRecipeDirect={isTourActive ? tourReadOnlyNotice : store.cookRecipeDirect}
+              onSaveLeftovers={isTourActive ? tourReadOnlyNotice : store.saveLeftoversFromRecipe}
               onAddRecipe={isTourActive ? tourReadOnlyNotice : store.addRecipe}
               onUpdateRecipe={isTourActive ? tourReadOnlyNotice : store.updateRecipe}
               onDeleteRecipe={isTourActive ? tourReadOnlyNotice : store.deleteRecipe}
@@ -385,6 +431,7 @@ export function App() {
             <SettingsView
               items={activeState.items}
               stores={activeState.stores}
+              events={activeState.events}
               tripReceipts={activeState.tripReceipts}
               settings={activeState.settings}
               onUpdateSettings={isTourActive ? tourReadOnlyNotice : store.updateSettings}
@@ -398,11 +445,11 @@ export function App() {
         </Suspense>
       </main>
 
-      {/* Toast Notification with Optional Undo Button */}
+      {/* Toast Notification with Optional Quick Action & Undo Button */}
       {toast && (
-        <div className="fixed bottom-[calc(4.75rem+env(safe-area-inset-bottom,0px))] lg:bottom-6 left-1/2 -translate-x-1/2 z-50 px-4 w-full max-w-md pointer-events-none">
+        <div className="fixed bottom-[calc(4.75rem+env(safe-area-inset-bottom,0px))] lg:bottom-6 left-1/2 -translate-x-1/2 z-50 px-4 w-full max-w-lg pointer-events-none">
           <div
-            className={`pointer-events-auto rounded-2xl px-4 py-3 text-xs sm:text-sm font-semibold text-white shadow-xl flex items-center justify-between gap-3 ${
+            className={`pointer-events-auto rounded-2xl px-4 py-3 text-xs sm:text-sm font-semibold text-white shadow-xl flex items-center justify-between gap-2.5 flex-wrap ${
               toast.tone === 'amber'
                 ? 'bg-amber-600'
                 : toast.tone === 'rose'
@@ -410,18 +457,31 @@ export function App() {
                 : 'bg-stone-900'
             }`}
           >
-            <span className={toast.onUndo ? 'text-left flex-1' : 'text-center flex-1'}>
+            <span
+              className={toast.onUndo || toast.onAction ? 'text-left flex-1 min-w-[140px]' : 'text-center flex-1'}
+            >
               {toast.text}
             </span>
-            {toast.onUndo && (
-              <button
-                type="button"
-                onClick={toast.onUndo}
-                className="shrink-0 rounded-xl bg-white/20 hover:bg-white/30 active:scale-95 px-3 py-1 text-xs font-bold text-white transition"
-              >
-                {toast.undoLabel || 'Undo'}
-              </button>
-            )}
+            <div className="flex items-center gap-1.5 shrink-0">
+              {toast.onAction && toast.actionLabel && (
+                <button
+                  type="button"
+                  onClick={toast.onAction}
+                  className="shrink-0 rounded-xl bg-teal-500 hover:bg-teal-400 active:scale-95 px-3 py-1 text-xs font-bold text-stone-950 transition"
+                >
+                  {toast.actionLabel}
+                </button>
+              )}
+              {toast.onUndo && (
+                <button
+                  type="button"
+                  onClick={toast.onUndo}
+                  className="shrink-0 rounded-xl bg-white/20 hover:bg-white/30 active:scale-95 px-3 py-1 text-xs font-bold text-white transition"
+                >
+                  {toast.undoLabel || 'Undo'}
+                </button>
+              )}
+            </div>
           </div>
         </div>
       )}

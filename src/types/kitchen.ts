@@ -235,6 +235,8 @@ export interface HouseholdSettings {
   activeUser: string;
   defaultTools: CookingTool[];
   householdName: string;
+  /** Off by default — opt-in quiet browser alert (max 1/day) for ≤48h expiring items or shopping day. */
+  browserRemindersEnabled?: boolean;
 }
 
 export interface SyncMetadata {

@@ -37,6 +37,8 @@ export interface ToastMessage {
   tone?: 'teal' | 'amber' | 'rose';
   undoLabel?: string;
   onUndo?: () => void;
+  actionLabel?: string;
+  onAction?: () => void;
 }
 
 export type SyncStatus = 'local_demo' | 'loading' | 'synced' | 'saving' | 'offline';
@@ -115,7 +117,12 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
     (
       text: string,
       tone: ToastMessage['tone'] = 'teal',
-      undo?: { label?: string; onUndo: () => void }
+      undo?: {
+        label?: string;
+        onUndo?: () => void;
+        actionLabel?: string;
+        onAction?: () => void;
+      }
     ) => {
       if (toastTimerRef.current !== null) {
         window.clearTimeout(toastTimerRef.current);
@@ -126,11 +133,17 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
         id,
         text,
         tone,
-        undoLabel: undo ? undo.label || 'Undo' : undefined,
-        onUndo: undo
+        undoLabel: undo?.onUndo ? undo.label || 'Undo' : undefined,
+        onUndo: undo?.onUndo
           ? () => {
-              undo.onUndo();
+              undo.onUndo?.();
               dismissToast();
+            }
+          : undefined,
+        actionLabel: undo?.onAction ? undo.actionLabel : undefined,
+        onAction: undo?.onAction
+          ? () => {
+              undo.onAction?.();
             }
           : undefined,
       });
@@ -139,7 +152,7 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
           setToast((curr) => (curr?.id === id ? null : curr));
           toastTimerRef.current = null;
         },
-        undo ? 5200 : 3400
+        undo?.onAction ? 6500 : undo?.onUndo ? 5200 : 3400
       );
     },
     [dismissToast]
@@ -1307,6 +1320,83 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
     [notify]
   );
 
+  const saveLeftoversFromRecipe = useCallback(
+    (recipeId: string, portions = 2) => {
+      const snapshot = stateRef.current;
+      const recipe = snapshot.recipes.find((r) => r.id === recipeId);
+      if (!recipe) return;
+
+      const qty = Math.max(1, Math.min(12, Math.round(portions)));
+      const now = new Date();
+      const nowIso = now.toISOString();
+      const expDate = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000).toISOString();
+      const newId = `item-leftover-${Date.now()}`;
+      const defaultStoreId = snapshot.stores[0]?.id ?? 'store-superstore';
+
+      const leftoverItem: InventoryItem = {
+        id: newId,
+        name: `Leftover ${recipe.name}`,
+        alias: recipe.alias ? `باقیمانده ${recipe.alias}` : '',
+        category: 'prepared',
+        zone: 'fridge',
+        trackingMode: 'portioned',
+        totalPortions: qty,
+        remainingPortions: qty,
+        portionLabel: 'serving',
+        packDescription: `${qty} × serving (homemade)`,
+        proteinPerPortion: Math.max(0, Math.round(recipe.proteinGrams || 0)),
+        nutrition: {
+          servingSizeLabel: '1 serving',
+          calories: Math.round(recipe.calories || 0),
+          protein: Math.round(recipe.proteinGrams || 0),
+          sugar: Math.round(recipe.sugarGrams || 0),
+          fiber: Math.round(recipe.fiberGrams || 0),
+          carbs: 0,
+          fat: 0,
+          micronutrients: { highlights: recipe.micronutrients },
+          source: 'estimated',
+        },
+        defaultStoreId,
+        storePurchaseCounts: { [defaultStoreId]: 1 },
+        avgDaysPerFullPack: 3,
+        cycleCount: 0,
+        lastRestockedAt: nowIso,
+        expiresAt: expDate,
+        notes: 'Saved from cooked meal',
+        autoAddOnEmpty: false,
+        updatedAt: nowIso,
+      };
+
+      setState((prev) => ({
+        ...prev,
+        items: [leftoverItem, ...prev.items],
+        syncMeta: clearTombstones(prev.syncMeta, [newId]),
+        events: [
+          {
+            id: `ev-${Date.now()}-lo`,
+            itemId: newId,
+            type: 'restock',
+            deltaPortions: qty,
+            timestamp: nowIso,
+            actor: resolveActor(prev.settings.activeUser),
+          },
+          ...prev.events.slice(0, 199),
+        ],
+      }));
+
+      notify(`Saved ${qty} serving(s) of "${leftoverItem.name}" to Fridge (+3d)`, 'teal', {
+        onUndo: () => {
+          setState({
+            ...snapshot,
+            syncMeta: recordTombstones(snapshot.syncMeta, [newId], new Date().toISOString()),
+          });
+          notify('Removed saved leftovers', 'amber');
+        },
+      });
+    },
+    [notify, resolveActor]
+  );
+
   const cookRecipeDirect = useCallback(
     (recipeId: string, servings: number) => {
       const snapshot = stateRef.current;
@@ -1378,11 +1468,19 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
         };
       });
 
+      const suggestLeftovers = mult >= 3 || recipe.effort === 'batch_prep';
       notify(`Cooked "${recipe.name}" (${mult}×) & deducted ingredients from Kitchen!`, 'teal', {
         onUndo: () => restoreSnapshot(snapshot, touchedIds, `Undid cooking "${recipe.name}"`),
+        ...(suggestLeftovers
+          ? {
+              actionLabel: 'Save Leftovers (+3d)',
+              onAction: () =>
+                saveLeftoversFromRecipe(recipe.id, Math.max(1, Math.ceil(mult / 2))),
+            }
+          : {}),
       });
     },
-    [notify, resolveActor, restoreSnapshot]
+    [notify, resolveActor, restoreSnapshot, saveLeftoversFromRecipe]
   );
 
   const toggleFavoriteRecipe = useCallback((recipeId: string) => {
@@ -1533,9 +1631,21 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
         };
       });
 
+      const suggestLeftovers =
+        !wasCooked &&
+        targetRecipe &&
+        (servingCount >= 3 || targetRecipe.effort === 'batch_prep');
+
       if (!wasCooked && deductFromInventory) {
         notify(`Cooked "${cookedTitle}" (${servingCount}×) & deducted from kitchen!`, 'teal', {
           onUndo: () => restoreSnapshot(snapshot, [plannedMealId], `Undid cooking "${cookedTitle}"`),
+          ...(suggestLeftovers
+            ? {
+                actionLabel: 'Save Leftovers (+3d)',
+                onAction: () =>
+                  saveLeftoversFromRecipe(targetRecipe.id, Math.max(1, Math.ceil(servingCount / 2))),
+              }
+            : {}),
         });
       } else if (wasCooked) {
         notify(`Unmarked "${cookedTitle}" & restored deducted ingredients`, 'amber');
@@ -1543,7 +1653,7 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
         notify(`Updated "${cookedTitle}" status`, 'teal');
       }
     },
-    [notify, resolveActor, restoreSnapshot]
+    [notify, resolveActor, restoreSnapshot, saveLeftoversFromRecipe]
   );
 
   const applyReceiptItems = useCallback(
@@ -1981,6 +2091,7 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
     deleteRecipe,
     addCuisine,
     cookRecipeDirect,
+    saveLeftoversFromRecipe,
     toggleFavoriteRecipe,
     setWeeklyPlan,
     updatePlannedMealServings,
