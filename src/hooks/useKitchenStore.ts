@@ -29,6 +29,7 @@ import {
 } from '../utils/productCategories';
 import { clearTombstones, mergeKitchenStates, recordTombstones } from '../utils/stateSync';
 import { ProposedInventoryUpdate } from '../utils/voiceInventoryParser';
+import { appendPriceRecord, formatCurrency } from '../utils/priceInsights';
 
 export interface ToastMessage {
   id: string;
@@ -1550,6 +1551,11 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
       if (parsedItems.length === 0) return;
       const curr = stateRef.current;
       const storeName = curr.stores.find((s) => s.id === storeId)?.name ?? 'Store';
+      const receiptTotal = Number(
+        parsedItems
+          .reduce((sum, p) => sum + (typeof p.price === 'number' && p.price > 0 ? p.price : 0), 0)
+          .toFixed(2)
+      );
 
       setState((prev) => {
         const nowIso = new Date().toISOString();
@@ -1559,6 +1565,11 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
         const newEvents = [...prev.events];
 
         for (const line of parsedItems) {
+          const validPrice =
+            typeof line.price === 'number' && Number.isFinite(line.price) && line.price > 0
+              ? Number(line.price.toFixed(2))
+              : undefined;
+
           if (line.matchedItemId) {
             matchedIds.add(line.matchedItemId);
             nextItems = nextItems.map((item) => {
@@ -1576,6 +1587,18 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
                 defaultStoreId: storeId,
                 storePurchaseCounts: counts,
                 lastRestockedAt: nowIso,
+                ...(validPrice !== undefined
+                  ? {
+                      lastPrice: validPrice,
+                      lastPriceStoreId: storeId,
+                      priceHistory: appendPriceRecord(item.priceHistory, {
+                        price: validPrice,
+                        storeId,
+                        date: nowIso,
+                        packDescription: line.packDescription || item.packDescription,
+                      }),
+                    }
+                  : {}),
                 updatedAt: nowIso,
               };
             });
@@ -1625,6 +1648,20 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
               avgDaysPerFullPack: profile.defaultAvgDays,
               cycleCount: 0,
               lastRestockedAt: nowIso,
+              ...(validPrice !== undefined
+                ? {
+                    lastPrice: validPrice,
+                    lastPriceStoreId: storeId,
+                    priceHistory: [
+                      {
+                        price: validPrice,
+                        storeId,
+                        date: nowIso,
+                        packDescription: line.packDescription || `${totalQty} portions`,
+                      },
+                    ],
+                  }
+                : {}),
               updatedAt: nowIso,
               autoAddOnEmpty: profile.defaultAutoAdd,
             });
@@ -1650,10 +1687,25 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
           return !shouldClear;
         });
 
+        const nextReceipts =
+          receiptTotal > 0
+            ? [
+                {
+                  id: `rcpt-${Date.now()}`,
+                  storeId,
+                  date: nowIso,
+                  totalSpent: receiptTotal,
+                  itemCount: parsedItems.length,
+                },
+                ...(prev.tripReceipts || []),
+              ].slice(0, 100)
+            : prev.tripReceipts || [];
+
         return {
           ...prev,
           items: nextItems,
           shoppingList: nextShopping,
+          tripReceipts: nextReceipts,
           syncMeta:
             removedShopIds.length > 0
               ? recordTombstones(prev.syncMeta, removedShopIds, nowIso)
@@ -1662,7 +1714,11 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
         };
       });
 
-      notify(`Receipt scanned! Restocked ${parsedItems.length} item(s) from ${storeName}.`, 'teal');
+      const priceNote = receiptTotal > 0 ? ` (${formatCurrency(receiptTotal)})` : '';
+      notify(
+        `Receipt scanned! Restocked ${parsedItems.length} item(s) from ${storeName}${priceNote}.`,
+        'teal'
+      );
     },
     [notify, resolveActor]
   );
