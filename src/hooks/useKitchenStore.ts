@@ -28,6 +28,7 @@ import {
   parseMeasuredQuantity,
 } from '../utils/productCategories';
 import { clearTombstones, mergeKitchenStates, recordTombstones } from '../utils/stateSync';
+import { ProposedInventoryUpdate } from '../utils/voiceInventoryParser';
 
 export interface ToastMessage {
   id: string;
@@ -1666,6 +1667,226 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
     [notify, resolveActor]
   );
 
+  const applyVoiceInventoryUpdates = useCallback(
+    (updates: ProposedInventoryUpdate[]) => {
+      const selected = updates.filter((u) => u.included);
+      if (selected.length === 0) return;
+
+      const snapshot = stateRef.current;
+      const nowIso = new Date().toISOString();
+      const addedItemIds: string[] = [];
+      const touchedItemIds: string[] = [];
+      const clearedShopIds: string[] = [];
+      let autoAddedCount = 0;
+
+      setState((prev) => {
+        const nextItems = [...prev.items];
+        let nextShopping = [...prev.shoppingList];
+        const newEvents = [...prev.events];
+        const actor = resolveActor(prev.settings.activeUser);
+        const fallbackStoreId = prev.stores[0]?.id ?? 'store-superstore';
+
+        selected.forEach((upd, idx) => {
+          if (upd.action === 'add_new' || !upd.matchedItemId) {
+            const newId = `item-voice-${Date.now()}-${idx}`;
+            addedItemIds.push(newId);
+            const prof = getCategoryProfile(upd.suggestedCategory);
+            const measured =
+              upd.suggestedTrackingMode === 'continuous'
+                ? parseMeasuredQuantity(upd.suggestedPackDescription)
+                : null;
+            const totalQty =
+              upd.suggestedTrackingMode === 'continuous'
+                ? Math.max(100, Math.round(upd.initialTotalPortions || 100))
+                : Math.max(1, Number((upd.targetRemainingPortions || upd.initialTotalPortions || 1).toFixed(2)));
+            const storeId = upd.storeId || fallbackStoreId;
+
+            const created: InventoryItem = {
+              id: newId,
+              name: upd.name.trim() || 'New Kitchen Item',
+              alias: upd.alias.trim(),
+              zone: upd.suggestedZone,
+              category: upd.suggestedCategory,
+              trackingMode: upd.suggestedTrackingMode,
+              continuousStyle:
+                upd.suggestedTrackingMode === 'continuous'
+                  ? measured
+                    ? 'measured'
+                    : 'level_only'
+                  : undefined,
+              containerSize: measured?.size,
+              containerUnit: measured?.unit,
+              totalPortions: totalQty,
+              remainingPortions: Math.max(
+                0,
+                Number((upd.targetRemainingPortions || totalQty).toFixed(2))
+              ),
+              portionLabel: upd.portionLabel || prof.defaultPortionLabel,
+              packDescription: upd.suggestedPackDescription || `${totalQty} portions`,
+              proteinPerPortion: 0,
+              defaultStoreId: storeId,
+              storePurchaseCounts: { [storeId]: 1 },
+              avgDaysPerFullPack: prof.defaultAvgDays,
+              cycleCount: 0,
+              lastRestockedAt: nowIso,
+              updatedAt: nowIso,
+              autoAddOnEmpty: prof.defaultAutoAdd,
+            };
+
+            nextItems.unshift(created);
+            newEvents.unshift({
+              id: `ev-${Date.now()}-vn-${idx}`,
+              itemId: newId,
+              type: 'restock',
+              deltaPortions: created.remainingPortions,
+              storeId,
+              timestamp: nowIso,
+              actor,
+            });
+            return;
+          }
+
+          const existingIdx = nextItems.findIndex((i) => i.id === upd.matchedItemId);
+          if (existingIdx < 0) return;
+          const prevTarget = nextItems[existingIdx];
+          touchedItemIds.push(prevTarget.id);
+
+          const nextRemaining = Math.max(0, Number(upd.targetRemainingPortions.toFixed(2)));
+          const delta = Number((nextRemaining - prevTarget.remainingPortions).toFixed(2));
+
+          if (upd.action === 'restock') {
+            const usedStoreId = upd.storeId || getLearnedStoreId(prevTarget);
+            const counts = { ...(prevTarget.storePurchaseCounts || {}) };
+            counts[usedStoreId] = (counts[usedStoreId] || 0) + 1;
+
+            nextItems[existingIdx] = {
+              ...prevTarget,
+              remainingPortions: nextRemaining,
+              totalPortions:
+                prevTarget.trackingMode === 'portioned'
+                  ? Math.max(prevTarget.totalPortions, nextRemaining)
+                  : prevTarget.totalPortions,
+              defaultStoreId: usedStoreId,
+              storePurchaseCounts: counts,
+              lastRestockedAt: nowIso,
+              updatedAt: nowIso,
+            };
+
+            const shopToRemove = nextShopping.filter((s) => s.inventoryItemId === prevTarget.id);
+            if (shopToRemove.length > 0) {
+              shopToRemove.forEach((s) => clearedShopIds.push(s.id));
+              nextShopping = nextShopping.filter((s) => s.inventoryItemId !== prevTarget.id);
+            }
+
+            newEvents.unshift({
+              id: `ev-${Date.now()}-vr-${idx}`,
+              itemId: prevTarget.id,
+              type: 'restock',
+              deltaPortions: Math.max(0, delta),
+              storeId: usedStoreId,
+              timestamp: nowIso,
+              actor,
+            });
+            return;
+          }
+
+          // 'use' | 'finish' | 'set_level'
+          let avgDaysPerFullPack = prevTarget.avgDaysPerFullPack;
+          let cycleCount = prevTarget.cycleCount;
+
+          if (nextRemaining === 0 && prevTarget.remainingPortions > 0) {
+            const ema = updateEmaCycleDays(
+              prevTarget.avgDaysPerFullPack,
+              prevTarget.lastRestockedAt,
+              prevTarget.cycleCount
+            );
+            avgDaysPerFullPack = ema.avgDaysPerFullPack;
+            cycleCount = ema.cycleCount;
+            if (prevTarget.autoAddOnEmpty) {
+              const res = ensureOnShoppingList(
+                nextShopping,
+                prevTarget,
+                'finished',
+                'essential',
+                undefined,
+                nowIso
+              );
+              nextShopping = res.list;
+              if (res.added) autoAddedCount += 1;
+            }
+          }
+
+          nextItems[existingIdx] = {
+            ...prevTarget,
+            remainingPortions: nextRemaining,
+            lastUsedAt: nowIso,
+            updatedAt: nowIso,
+            avgDaysPerFullPack,
+            cycleCount,
+          };
+
+          newEvents.unshift({
+            id: `ev-${Date.now()}-vu-${idx}`,
+            itemId: prevTarget.id,
+            type:
+              nextRemaining === 0
+                ? 'finished'
+                : upd.action === 'set_level'
+                ? 'level_adjust'
+                : 'use_portion',
+            deltaPortions: delta,
+            timestamp: nowIso,
+            actor,
+          });
+        });
+
+        let nextSyncMeta = prev.syncMeta;
+        if (addedItemIds.length > 0) {
+          nextSyncMeta = clearTombstones(nextSyncMeta, addedItemIds);
+        }
+        if (clearedShopIds.length > 0) {
+          nextSyncMeta = recordTombstones(nextSyncMeta, clearedShopIds, nowIso);
+        }
+
+        return {
+          ...prev,
+          items: nextItems,
+          shoppingList: nextShopping,
+          syncMeta: nextSyncMeta,
+          events: newEvents.slice(0, 200),
+        };
+      });
+
+      const summary =
+        autoAddedCount > 0
+          ? `Applied ${selected.length} voice update(s) • ${autoAddedCount} auto-added to Shopping`
+          : `Applied ${selected.length} kitchen update(s)`;
+
+      notify(summary, autoAddedCount > 0 ? 'amber' : 'teal', {
+        onUndo: () => {
+          const undoIso = new Date().toISOString();
+          const touchedSet = new Set(touchedItemIds);
+          let undoSyncMeta = snapshot.syncMeta;
+          if (addedItemIds.length > 0) {
+            undoSyncMeta = recordTombstones(undoSyncMeta, addedItemIds, undoIso);
+          }
+          if (clearedShopIds.length > 0) {
+            undoSyncMeta = clearTombstones(undoSyncMeta, clearedShopIds);
+          }
+          setState({
+            ...snapshot,
+            items: snapshot.items.map((it) =>
+              touchedSet.has(it.id) ? { ...it, updatedAt: undoIso } : it
+            ),
+            syncMeta: undoSyncMeta,
+          });
+          notify(`Undid ${selected.length} voice update(s)`, 'amber');
+        },
+      });
+    },
+    [notify, resolveActor]
+  );
+
   const updateSettings = useCallback((patch: Partial<HouseholdSettings>) => {
     const nowIso = new Date().toISOString();
     setState((prev) => ({
@@ -1695,6 +1916,7 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
     removeShoppingItem,
     completeShoppingTrip,
     applyReceiptItems,
+    applyVoiceInventoryUpdates,
     addStore,
     updateStore,
     deleteStore,

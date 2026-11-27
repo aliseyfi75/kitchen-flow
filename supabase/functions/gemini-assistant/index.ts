@@ -430,6 +430,78 @@ ${transcript ? `Spoken/typed text: "${transcript}"` : 'Listen to the attached au
       });
     }
 
+    if (action === 'parse_kitchen_voice_update') {
+      const { audioBase64, audioMimeType, transcript, languageHint, existingItems, stores } = body;
+      const system = `You are a bilingual English & Persian (Farsi) kitchen inventory assistant.
+The user will describe changes to their kitchen stock by voice or text — in English, Farsi, or mixed Pinglish — such as what they used/ate/cooked, what ran out/finished, current fill levels, or groceries they bought/restocked.
+Your job:
+1. Accurately transcribe what they said.
+2. Break the utterance into individual item updates.
+3. Match each item to an existing item in existingItems whenever it refers to the same product (match across English & Persian — e.g. "شیر" -> "2% Milk", "تخم مرغ" -> "Eggs", "سینه مرغ" -> "Chicken Breast", "اسفناج" -> "Baby Spinach", "روغن زیتون" -> "Extra Virgin Olive Oil"). Set "matchedItemId" to its exact id.
+4. Determine the exact action for each item:
+   - "use": consumed/ate/cooked/used some amount. Convert spoken units carefully using the item's totalPortions, remainingPortions, containerSize, containerUnit, and portionLabel! Return "amount" + "unit" AND compute "newRemainingPortions" (clamped >= 0) and "newLevelPercent" (0-100 for continuous items). Examples:
+     * Eggs (remaining 12, portionLabel "egg"): "ate 3 eggs" -> action "use", amount 3, unit "egg", newRemainingPortions 9.
+     * Milk (4L, totalPortions 16, remaining 8, portionLabel "1 cup (250ml)"): "used 2 cups" -> amount 2, unit "cup", newRemainingPortions 6; "used 1 liter" -> amount 1, unit "L", newRemainingPortions 4; "used half the milk" -> newRemainingPortions 4.
+     * Spinach (continuous, totalPortions 100, remaining 50): "used half the spinach" -> newRemainingPortions 25, newLevelPercent 25.
+   - "finish": finished / empty / ran out / "تموم شد" -> newRemainingPortions 0, newLevelPercent 0.
+   - "set_level": user directly states how much is left ("milk is half full", "olive oil is almost out", "نصف شیر مونده", "۳ تا تخم‌مرغ مونده") -> set exact newRemainingPortions and/or newLevelPercent (almost out ~15%, quarter ~25%, half ~50%, mostly full ~75%, full 100%).
+   - "restock": bought/refilled an existing item ("bought 1 pack chicken from Costco", "از کاستکو شیر خریدم") -> set "addPortions" (defaulting to 1 full container/pack = item.totalPortions if count is 1 pack/jug) and "newRemainingPortions" = remainingPortions + addPortions, plus "storeId" matching stores if mentioned.
+   - "add_new": user explicitly bought/added an item NOT in existingItems -> omit matchedItemId and provide clean English "name", Persian "alias", "category", "zone", "trackingMode", "packDescription", "initialTotalPortions", "portionLabel", and optional "storeId".
+
+Return strictly valid JSON with this exact shape:
+{
+  "transcript": "clean verbatim transcript of what the user said",
+  "updates": [
+    {
+      "spokenText": "the spoken phrase for this item",
+      "action": "use" | "finish" | "set_level" | "restock" | "add_new",
+      "matchedItemId": "exact_id_from_existingItems_or_null",
+      "name": "Clean English product name",
+      "alias": "Natural Persian alias",
+      "amount": 2,
+      "unit": "egg | cup | L | g | bag | container | %",
+      "addPortions": 8,
+      "newRemainingPortions": 6,
+      "newLevelPercent": 50,
+      "storeId": "matching_store_id_or_null",
+      "reason": "Short clear summary e.g. Used 2 cups (500ml)",
+      "category": "protein" | "dairy" | "produce" | "beverages" | "grains" | "condiments" | "spices" | "pantry_staple" | "snacks" | "prepared",
+      "zone": "fridge" | "freezer" | "pantry",
+      "trackingMode": "portioned" | "continuous",
+      "packDescription": "e.g. 4L jug, 12 eggs",
+      "initialTotalPortions": 6,
+      "portionLabel": "e.g. egg, 1 cup, container"
+    }
+  ]
+}`;
+
+      const parts: unknown[] = [
+        {
+          text: `Language hint: ${languageHint || 'auto (English or Farsi)'}.
+Known stores: ${JSON.stringify(stores || [])}.
+Current Kitchen Inventory (match matchedItemId & calculate exact before->after values using these): ${JSON.stringify(
+            (existingItems || []).slice(0, 120)
+          )}.
+${transcript ? `Spoken/typed text: "${transcript}"` : 'Listen to the attached audio and extract every kitchen stock update:'}`,
+        },
+      ];
+
+      if (audioBase64) {
+        parts.push({
+          inlineData: {
+            mimeType: audioMimeType || 'audio/webm',
+            data: audioBase64,
+          },
+        });
+      }
+
+      const result = await callGemini(geminiKey, parts, system);
+
+      return new Response(JSON.stringify(result), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
     return new Response(JSON.stringify({ error: `Unknown action: ${action}` }), {
       status: 400,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },

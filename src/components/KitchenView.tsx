@@ -12,6 +12,7 @@ import {
   Flame,
   LayoutGrid,
   ListFilter,
+  Mic,
   Minus,
   PartyPopper,
   Plus,
@@ -53,6 +54,7 @@ import {
   hasServingPourAction,
 } from '../utils/inventoryDisplay';
 import { PRODUCT_CATEGORIES, PRODUCT_CATEGORY_ORDER } from '../utils/productCategories';
+import { ProposedInventoryUpdate } from '../utils/voiceInventoryParser';
 import { CategoryIcon } from './CategoryIcon';
 
 const ItemModal = lazy(() =>
@@ -60,6 +62,9 @@ const ItemModal = lazy(() =>
 );
 const PantryStarterModal = lazy(() =>
   import('./PantryStarterModal').then((m) => ({ default: m.PantryStarterModal }))
+);
+const VoiceInventoryModal = lazy(() =>
+  import('./VoiceInventoryModal').then((m) => ({ default: m.VoiceInventoryModal }))
 );
 
 type KitchenGroupMode = 'category' | 'urgency';
@@ -92,6 +97,7 @@ interface KitchenViewProps {
   onAddToShoppingManually: (itemId: string) => void;
   onSaveItem: (item: InventoryItem, isNew: boolean) => void;
   onAddItemsBatch: (items: InventoryItem[]) => void;
+  onApplyVoiceUpdates: (updates: ProposedInventoryUpdate[]) => void;
   onDeleteItem: (itemId: string) => void;
   onOpenReceiptScanner: () => void;
   onOpenShoppingTab?: () => void;
@@ -309,6 +315,7 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
   onAddToShoppingManually,
   onSaveItem,
   onAddItemsBatch,
+  onApplyVoiceUpdates,
   onDeleteItem,
   onOpenReceiptScanner,
   onOpenShoppingTab,
@@ -321,6 +328,7 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
   const [recategorizingItemId, setRecategorizingItemId] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [showPantryStarter, setShowPantryStarter] = useState(false);
+  const [showVoiceModal, setShowVoiceModal] = useState(false);
   const [modalState, setModalState] = useState<{
     item: InventoryItem | null;
     initialTab: 'basics' | 'nutrition';
@@ -1083,6 +1091,16 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
         <div className="flex items-center gap-2 shrink-0">
           <button
             type="button"
+            onClick={() => setShowVoiceModal(true)}
+            className="flex-1 sm:flex-none inline-flex items-center justify-center gap-1.5 rounded-xl bg-indigo-50 border border-indigo-200 hover:bg-indigo-100 text-indigo-800 px-3 py-2 text-xs sm:text-sm font-semibold shadow-2xs transition"
+            title="Log used, finished, or bought items by voice (English or فارسی)"
+          >
+            <Mic className="w-4 h-4" />
+            Voice Log
+          </button>
+
+          <button
+            type="button"
             onClick={onOpenReceiptScanner}
             className="flex-1 sm:flex-none inline-flex items-center justify-center gap-1.5 rounded-xl bg-white border border-teal-200 hover:bg-teal-50 text-teal-800 px-3 py-2 text-xs sm:text-sm font-semibold shadow-2xs transition"
           >
@@ -1382,6 +1400,17 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
             stores={stores}
             onClose={() => setShowPantryStarter(false)}
             onAddItems={onAddItemsBatch}
+          />
+        </Suspense>
+      )}
+
+      {showVoiceModal && (
+        <Suspense fallback={null}>
+          <VoiceInventoryModal
+            items={items}
+            stores={stores}
+            onClose={() => setShowVoiceModal(false)}
+            onConfirmApply={onApplyVoiceUpdates}
           />
         </Suspense>
       )}

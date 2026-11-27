@@ -319,6 +319,9 @@ export function App() {
             }
             onSaveItem={isTourActive ? tourReadOnlyNotice : store.saveItem}
             onAddItemsBatch={isTourActive ? tourReadOnlyNotice : store.addItemsBatch}
+            onApplyVoiceUpdates={
+              isTourActive ? tourReadOnlyNotice : store.applyVoiceInventoryUpdates
+            }
             onDeleteItem={isTourActive ? tourReadOnlyNotice : store.deleteItem}
             onOpenReceiptScanner={() =>
               isTourActive ? tourReadOnlyNotice() : setShowReceiptScanner(true)
