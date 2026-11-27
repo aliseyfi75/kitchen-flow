@@ -21,6 +21,13 @@ import {
   VoiceParsedFood,
   VoiceParsedIngredient,
 } from '../utils/voiceFoodParser';
+import {
+  buildProposedUpdateForItem,
+  parseKitchenVoiceUpdateLocally,
+  ProposedInventoryUpdate,
+  VoiceInventoryAction,
+  VoiceInventoryParseResult,
+} from '../utils/voiceInventoryParser';
 import { isSupabaseConfigured, supabase } from './supabaseClient';
 
 /**
@@ -535,3 +542,310 @@ export async function parseVoiceFoodWithGemini(params: {
     source: usedSource,
   };
 }
+
+export async function parseKitchenVoiceUpdateWithGemini(params: {
+  audioBlob?: Blob | null;
+  transcript?: string;
+  languageHint: 'auto' | 'en' | 'fa';
+  inventory: InventoryItem[];
+  stores: Store[];
+}): Promise<VoiceInventoryParseResult> {
+  const { audioBlob, transcript, languageHint, inventory, stores } = params;
+  const cleanTranscript = (transcript || '').trim();
+  const defaultStoreId = stores[0]?.id ?? 'store-superstore';
+
+  if (!isSupabaseConfigured || !supabase) {
+    if (!cleanTranscript) {
+      throw new Error(
+        'Audio transcription requires Gemini Cloud sync, or type/dictate your update in the box below.'
+      );
+    }
+    return parseKitchenVoiceUpdateLocally(cleanTranscript, inventory, stores);
+  }
+
+  let audioBase64: string | undefined;
+  let audioMimeType: string | undefined;
+  if (audioBlob && audioBlob.size > 0) {
+    const encoded = await blobToBase64(audioBlob);
+    audioBase64 = encoded.base64;
+    audioMimeType = encoded.mimeType;
+  }
+
+  type RawInventoryUpdate = {
+    spokenText?: string;
+    action?: string;
+    matchedItemId?: string | null;
+    name?: string;
+    alias?: string;
+    amount?: number;
+    unit?: string;
+    addPortions?: number;
+    newRemainingPortions?: number;
+    newLevelPercent?: number;
+    storeId?: string | null;
+    reason?: string;
+    category?: string;
+    zone?: string;
+    trackingMode?: string;
+    packDescription?: string;
+    initialTotalPortions?: number;
+    portionLabel?: string;
+  };
+
+  type RawInventoryVoiceResponse = {
+    transcript?: string;
+    updates?: RawInventoryUpdate[];
+  };
+
+  const existingItemsPayload = inventory.map((i) => ({
+    id: i.id,
+    name: i.name,
+    alias: i.alias,
+    zone: i.zone,
+    category: i.category,
+    trackingMode: i.trackingMode,
+    continuousStyle: i.continuousStyle,
+    containerSize: i.containerSize,
+    containerUnit: i.containerUnit,
+    totalPortions: i.totalPortions,
+    remainingPortions: i.remainingPortions,
+    portionLabel: i.portionLabel,
+    packDescription: i.packDescription,
+    defaultStoreId: i.defaultStoreId,
+  }));
+
+  const storesPayload = stores.map((s) => ({
+    id: s.id,
+    name: s.name,
+    alias: s.alias,
+  }));
+
+  let raw: RawInventoryVoiceResponse;
+  let usedSource: VoiceInventoryParseResult['source'] = audioBase64
+    ? 'gemini_audio'
+    : 'gemini_text';
+
+  try {
+    raw = await invokeGeminiEdge<RawInventoryVoiceResponse>({
+      action: 'parse_kitchen_voice_update',
+      audioBase64,
+      audioMimeType,
+      transcript: cleanTranscript || undefined,
+      languageHint,
+      stores: storesPayload,
+      existingItems: existingItemsPayload,
+    });
+  } catch (primaryErr) {
+    // Retry text-only if audio upload failed (e.g. mobile codec mismatch) and we have transcript text
+    if (audioBase64 && cleanTranscript) {
+      raw = await invokeGeminiEdge<RawInventoryVoiceResponse>({
+        action: 'parse_kitchen_voice_update',
+        transcript: cleanTranscript,
+        languageHint,
+        stores: storesPayload,
+        existingItems: existingItemsPayload,
+      });
+      usedSource = 'gemini_text';
+    } else {
+      throw primaryErr;
+    }
+  }
+
+  const itemById = new Map(inventory.map((i) => [i.id, i]));
+  const storeIds = new Set(stores.map((s) => s.id));
+  const validActions: VoiceInventoryAction[] = [
+    'use',
+    'finish',
+    'set_level',
+    'restock',
+    'add_new',
+  ];
+
+  const mappedUpdates: ProposedInventoryUpdate[] = (raw.updates || [])
+    .filter((u) => (u.name || u.alias || u.spokenText || u.matchedItemId || '').trim().length > 0)
+    .map((u, idx) => {
+      const id = `vupd-ai-${idx}-${Date.now()}`;
+      const spokenText = (u.spokenText || u.name || '').trim();
+      const candidateName = (u.name || spokenText).trim();
+      const candidateAlias = (u.alias || '').trim();
+      const rawAction = validActions.includes(u.action as VoiceInventoryAction)
+        ? (u.action as VoiceInventoryAction)
+        : 'use';
+
+      const directMatch =
+        u.matchedItemId && itemById.has(u.matchedItemId)
+          ? itemById.get(u.matchedItemId)
+          : undefined;
+      const fallbackMatch =
+        directMatch || rawAction === 'add_new'
+          ? null
+          : matchVoiceIngredientToKitchen(candidateName, candidateAlias, inventory) ??
+            matchVoiceIngredientToKitchen(spokenText, '', inventory);
+      const matched = directMatch ?? fallbackMatch?.item;
+
+      const resolvedStoreId =
+        u.storeId && storeIds.has(u.storeId) ? u.storeId : undefined;
+
+      if (matched) {
+        const effectiveAction: VoiceInventoryAction =
+          rawAction === 'add_new' ? 'restock' : rawAction;
+
+        // If Gemini returned an explicit newRemainingPortions or newLevelPercent, use it cleanly
+        const hasExplicitRemaining =
+          typeof u.newRemainingPortions === 'number' &&
+          Number.isFinite(u.newRemainingPortions) &&
+          u.newRemainingPortions >= 0;
+        const hasExplicitPct =
+          typeof u.newLevelPercent === 'number' &&
+          Number.isFinite(u.newLevelPercent) &&
+          u.newLevelPercent >= 0;
+
+        if (effectiveAction === 'finish') {
+          return buildProposedUpdateForItem({
+            id,
+            spokenText,
+            action: 'finish',
+            item: matched,
+            storeId: resolvedStoreId,
+            reason: u.reason,
+          });
+        }
+
+        if (hasExplicitRemaining || (effectiveAction === 'set_level' && hasExplicitPct)) {
+          let targetRemaining: number;
+          let targetPercent: number | undefined;
+
+          if (effectiveAction === 'set_level' && hasExplicitPct && matched.trackingMode === 'continuous') {
+            const pct = Math.max(0, Math.min(200, Math.round(u.newLevelPercent!)));
+            targetPercent = pct;
+            targetRemaining =
+              pct === 0
+                ? 0
+                : Math.max(0.01, Number(((matched.totalPortions * pct) / 100).toFixed(2)));
+          } else {
+            targetRemaining = Math.max(0, Number(u.newRemainingPortions!.toFixed(2)));
+            if (matched.trackingMode === 'continuous') {
+              targetPercent =
+                hasExplicitPct
+                  ? Math.max(0, Math.min(200, Math.round(u.newLevelPercent!)))
+                  : matched.totalPortions > 0
+                  ? Math.round((targetRemaining / matched.totalPortions) * 100)
+                  : 0;
+            }
+          }
+
+          const deltaPortions = Number((targetRemaining - matched.remainingPortions).toFixed(2));
+          return {
+            id,
+            spokenText,
+            action: targetRemaining === 0 && effectiveAction === 'use' ? 'finish' : effectiveAction,
+            matchedItemId: matched.id,
+            name: matched.name,
+            alias: matched.alias || candidateAlias,
+            targetRemainingPortions: targetRemaining,
+            targetPercent,
+            deltaPortions,
+            storeId: resolvedStoreId || matched.defaultStoreId,
+            reason:
+              u.reason?.trim() ||
+              (effectiveAction === 'restock'
+                ? 'Restocked'
+                : effectiveAction === 'set_level'
+                ? 'Adjusted level'
+                : 'Updated stock'),
+            included: true,
+            suggestedCategory: matched.category,
+            suggestedZone: matched.zone,
+            suggestedTrackingMode: matched.trackingMode,
+            suggestedPackDescription: matched.packDescription,
+            initialTotalPortions: matched.totalPortions,
+            portionLabel: matched.portionLabel,
+          };
+        }
+
+        // Otherwise delegate unit/amount calculation to buildProposedUpdateForItem
+        return buildProposedUpdateForItem({
+          id,
+          spokenText,
+          action: effectiveAction,
+          item: matched,
+          amount:
+            effectiveAction === 'restock' && typeof u.addPortions === 'number' && u.addPortions > 0
+              ? u.addPortions
+              : typeof u.amount === 'number' && u.amount > 0
+              ? u.amount
+              : undefined,
+          unit: u.unit,
+          explicitLevelPct: hasExplicitPct ? u.newLevelPercent : undefined,
+          storeId: resolvedStoreId,
+          reason: u.reason,
+        });
+      }
+
+      // Brand-new item not in Kitchen yet
+      const inferred = inferProductDefaultsFromText(`${candidateName} ${candidateAlias}`);
+      const rawCat = u.category as FoodCategory | undefined;
+      const cat: FoodCategory =
+        rawCat && VALID_CATEGORIES.includes(rawCat)
+          ? rawCat
+          : inferred?.category ?? 'produce';
+      const prof = getCategoryProfile(cat);
+      const rawZone = u.zone as StorageZone | undefined;
+      const zone: StorageZone =
+        rawZone === 'fridge' || rawZone === 'freezer' || rawZone === 'pantry'
+          ? rawZone
+          : inferred?.zone ?? prof.defaultZone;
+      const trackingMode: TrackingMode =
+        u.trackingMode === 'continuous' || u.trackingMode === 'portioned'
+          ? u.trackingMode
+          : inferred?.trackingMode ?? prof.defaultTrackingMode;
+
+      const initialTotal =
+        trackingMode === 'continuous'
+          ? 100
+          : Math.max(
+              1,
+              Math.round(
+                Number(u.initialTotalPortions) ||
+                  Number(u.addPortions) ||
+                  Number(u.amount) ||
+                  prof.defaultPortionCount
+              )
+            );
+      const portionLabel =
+        u.portionLabel?.trim() ||
+        (trackingMode === 'continuous' ? 'container' : prof.defaultPortionLabel);
+
+      return {
+        id,
+        spokenText,
+        action: 'add_new',
+        matchedItemId: undefined,
+        name: candidateName || 'New Kitchen Item',
+        alias: candidateAlias,
+        targetRemainingPortions: initialTotal,
+        targetPercent: trackingMode === 'continuous' ? 100 : undefined,
+        deltaPortions: initialTotal,
+        storeId: resolvedStoreId || defaultStoreId,
+        reason: u.reason?.trim() || 'New item to add to Kitchen',
+        included: true,
+        suggestedCategory: cat,
+        suggestedZone: zone,
+        suggestedTrackingMode: trackingMode,
+        suggestedPackDescription:
+          u.packDescription?.trim() ||
+          (trackingMode === 'continuous'
+            ? prof.levelPackPresets[0] ?? '1 container'
+            : `${initialTotal} × ${portionLabel}`),
+        initialTotalPortions: initialTotal,
+        portionLabel,
+      };
+    });
+
+  return {
+    transcript: (raw.transcript || cleanTranscript).trim(),
+    updates: mappedUpdates,
+    source: usedSource,
+  };
+}
+
