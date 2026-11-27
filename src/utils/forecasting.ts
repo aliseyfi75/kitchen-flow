@@ -134,8 +134,7 @@ export function updateEmaCycleDays(
   };
 }
 
-export function formatShoppingDayName(day: number, lang: 'en' | 'fa'): string {
+export function formatShoppingDayName(day: number): string {
   const enDays = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-  const faDays = ['یکشنبه', 'دوشنبه', 'سه‌شنبه', 'چهارشنبه', 'پنجشنبه', 'جمعه', 'شنبه'];
-  return lang === 'fa' ? faDays[day % 7] : enDays[day % 7];
+  return enDays[((day % 7) + 7) % 7];
 }

@@ -29,10 +29,9 @@ import {
   ShoppingItem,
   StorageZone,
   Store,
-  UILanguage,
   UIMode,
 } from '../types/kitchen';
-import { EFFORT_META, t, TOOL_META, ZONE_META } from '../i18n/translations';
+import { EFFORT_META, TOOL_META, UI_LABELS, ZONE_META } from '../i18n/translations';
 import { computeItemForecast } from '../utils/forecasting';
 import {
   estimateRecipeNutrition,
@@ -53,7 +52,6 @@ interface MealPlannerViewProps {
   dailyProteinTarget: number;
   dailySugarLimit: number;
   shoppingDay: number;
-  lang: UILanguage;
   uiMode: UIMode;
   onSetWeeklyPlan: (plan: PlannedMeal[]) => void;
   onUpdateMealServings: (plannedMealId: string, servings: number) => void;
@@ -102,7 +100,6 @@ export const MealPlannerView: React.FC<MealPlannerViewProps> = ({
   dailyProteinTarget,
   dailySugarLimit,
   shoppingDay,
-  lang,
   uiMode,
   onSetWeeklyPlan,
   onUpdateMealServings,
@@ -563,9 +560,9 @@ export const MealPlannerView: React.FC<MealPlannerViewProps> = ({
                       : 'border-stone-200 hover:bg-stone-50 text-stone-700'
                   }`}
                 >
-                  <div className="text-xs font-bold">{EFFORT_META[lvl][lang]}</div>
+                  <div className="text-xs font-bold">{EFFORT_META[lvl].en}</div>
                   <div className="text-[11px] text-stone-500 mt-0.5">
-                    {lang === 'fa' ? EFFORT_META[lvl].descFa : EFFORT_META[lvl].descEn}
+                    {EFFORT_META[lvl].descEn}
                   </div>
                 </button>
               );
@@ -577,7 +574,7 @@ export const MealPlannerView: React.FC<MealPlannerViewProps> = ({
         <div className="space-y-1.5">
           <div className="flex items-center justify-between">
             <label className="text-xs font-semibold text-stone-600">
-              {t(lang, 'cookingTools')}
+              {UI_LABELS.cookingTools}
             </label>
             <span className="text-[11px] text-stone-400">Tap to include / exclude</span>
           </div>
@@ -596,7 +593,7 @@ export const MealPlannerView: React.FC<MealPlannerViewProps> = ({
                   }`}
                 >
                   <span>{TOOL_META[tool].emoji}</span>
-                  <span>{TOOL_META[tool][lang]}</span>
+                  <span>{TOOL_META[tool].en}</span>
                 </button>
               );
             })}
@@ -607,7 +604,7 @@ export const MealPlannerView: React.FC<MealPlannerViewProps> = ({
         <div className="space-y-1.5">
           <div className="flex items-center justify-between gap-2">
             <label className="text-xs font-semibold text-stone-600">
-              {t(lang, 'ingredientFocus')}
+              {UI_LABELS.ingredientFocus}
             </label>
             <span className="text-[11px] text-stone-400">
               1 tap = <span className="text-teal-700 font-semibold">Must Use</span> • 2 taps ={' '}
@@ -664,7 +661,7 @@ export const MealPlannerView: React.FC<MealPlannerViewProps> = ({
               className="inline-flex items-center gap-2 rounded-xl bg-teal-700 hover:bg-teal-800 text-white px-4 py-2.5 text-xs sm:text-sm font-bold shadow-xs transition"
             >
               <ChefHat className="w-4 h-4" />
-              {days === 0 ? 'Suggest 1 Meal Now' : t(lang, 'generatePlan')}
+              {days === 0 ? 'Suggest 1 Meal Now' : UI_LABELS.generatePlan}
             </button>
             <button
               type="button"
@@ -928,8 +925,8 @@ export const MealPlannerView: React.FC<MealPlannerViewProps> = ({
                             >
                               <CheckCircle2 className="w-3.5 h-3.5" />
                               {meal.cooked
-                                ? t(lang, 'cookedDone')
-                                : `${t(lang, 'cookedBtn')} (${servings}×)`}
+                                ? UI_LABELS.cookedDone
+                                : `${UI_LABELS.cookedBtn} (${servings}×)`}
                             </button>
                           </div>
                         </div>
@@ -971,7 +968,7 @@ export const MealPlannerView: React.FC<MealPlannerViewProps> = ({
               className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-teal-700 hover:bg-teal-800 text-white px-4 py-2 text-xs font-bold shadow-xs shrink-0"
             >
               <Plus className="w-4 h-4" />
-              {t(lang, 'addRecipe')}
+              {UI_LABELS.addRecipe}
             </button>
           </div>
         </div>
@@ -1192,7 +1189,7 @@ export const MealPlannerView: React.FC<MealPlannerViewProps> = ({
                   >
                     {(['fridge', 'freezer', 'pantry'] as StorageZone[]).map((z) => (
                       <option key={z} value={z}>
-                        {ZONE_META[z][lang]}
+                        {ZONE_META[z].en}
                       </option>
                     ))}
                   </select>
@@ -1640,7 +1637,6 @@ export const MealPlannerView: React.FC<MealPlannerViewProps> = ({
           items={items}
           stores={stores}
           cuisines={cuisines}
-          lang={lang}
           onClose={() => setShowVoiceModal(false)}
           onConfirmSave={(recipe, newInventoryItems) => {
             onAddRecipe(recipe, newInventoryItems);

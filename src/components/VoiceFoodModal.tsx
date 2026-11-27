@@ -22,7 +22,6 @@ import {
   StorageZone,
   Store,
   TrackingMode,
-  UILanguage,
 } from '../types/kitchen';
 import { CATEGORY_META, TOOL_META, ZONE_META } from '../i18n/translations';
 import { estimateRecipeNutrition } from '../utils/mealEngine';
@@ -43,7 +42,6 @@ interface VoiceFoodModalProps {
   items: InventoryItem[];
   stores: Store[];
   cuisines: string[];
-  lang: UILanguage;
   onClose: () => void;
   onConfirmSave: (
     recipe: Omit<MealRecipe, 'id'>,
@@ -102,7 +100,6 @@ export const VoiceFoodModal: React.FC<VoiceFoodModalProps> = ({
   items,
   stores,
   cuisines,
-  lang,
   onClose,
   onConfirmSave,
 }) => {
@@ -976,7 +973,7 @@ export const VoiceFoodModal: React.FC<VoiceFoodModalProps> = ({
                             </div>
                             {inv && (
                               <div className="text-[11px] text-stone-600 mt-0.5">
-                                {ZONE_META[inv.zone][lang]} • {formatItemStockSummary(inv)}
+                                {ZONE_META[inv.zone].en} • {formatItemStockSummary(inv)}
                               </div>
                             )}
                           </div>
@@ -1199,7 +1196,7 @@ export const VoiceFoodModal: React.FC<VoiceFoodModalProps> = ({
                           >
                             {PRODUCT_CATEGORY_ORDER.map((c) => (
                               <option key={c} value={c}>
-                                {CATEGORY_META[c][lang]}
+                                {CATEGORY_META[c].en}
                               </option>
                             ))}
                           </select>
@@ -1219,7 +1216,7 @@ export const VoiceFoodModal: React.FC<VoiceFoodModalProps> = ({
                           >
                             {(['fridge', 'freezer', 'pantry'] as StorageZone[]).map((z) => (
                               <option key={z} value={z}>
-                                {ZONE_META[z][lang]}
+                                {ZONE_META[z].en}
                               </option>
                             ))}
                           </select>

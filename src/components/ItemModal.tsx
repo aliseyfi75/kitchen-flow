@@ -25,7 +25,6 @@ import {
   NutritionFacts,
   StorageZone,
   Store,
-  UILanguage,
 } from '../types/kitchen';
 import { CATEGORY_META, ZONE_META } from '../i18n/translations';
 import { lookupBarcodeFromOpenFoodFacts } from '../utils/barcodeLookup';
@@ -57,7 +56,6 @@ interface ItemModalProps {
   initialTab?: 'basics' | 'nutrition';
   initialCategory?: FoodCategory;
   stores: Store[];
-  lang: UILanguage;
   onClose: () => void;
   onSave: (item: InventoryItem, isNew: boolean) => void;
   onDelete?: (itemId: string) => void;
@@ -90,13 +88,13 @@ export const ItemModal: React.FC<ItemModalProps> = ({
   initialTab = 'basics',
   initialCategory: presetCategory,
   stores,
-  lang,
   onClose,
   onSave,
   onDelete,
 }) => {
   const isNew = !item;
   const labelInputRef = useRef<HTMLInputElement>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   // New items open on Barcode + Category Quick-Start unless launched directly from a category section
   const [step, setStep] = useState<'barcode_first' | 'form'>(
@@ -622,9 +620,7 @@ export const ItemModal: React.FC<ItemModalProps> = ({
             <div>
               <h2 className="text-lg font-bold text-stone-900 leading-tight">
                 {step === 'barcode_first'
-                  ? lang === 'fa'
-                    ? 'افزودن ماده غذایی جدید'
-                    : 'Add Kitchen Item'
+                  ? 'Add Kitchen Item'
                   : isNew
                   ? `${profile.en}`
                   : item.name}
@@ -796,7 +792,7 @@ export const ItemModal: React.FC<ItemModalProps> = ({
                         </p>
                         <div className="flex items-center gap-1.5 mt-1.5 text-[10px] font-semibold">
                           <span className="px-1.5 py-0.5 rounded bg-stone-100 text-stone-600">
-                            {ZONE_META[prof.defaultZone][lang]}
+                            {ZONE_META[prof.defaultZone].en}
                           </span>
                           <span className="px-1.5 py-0.5 rounded bg-teal-50 text-teal-800">
                             {modeTag}
@@ -877,7 +873,7 @@ export const ItemModal: React.FC<ItemModalProps> = ({
                             }`}
                           >
                             {z.icon}
-                            {ZONE_META[z.id][lang]}
+                            {ZONE_META[z.id].en}
                           </button>
                         );
                       })}
@@ -898,7 +894,7 @@ export const ItemModal: React.FC<ItemModalProps> = ({
                       >
                         {PRODUCT_CATEGORY_ORDER.map((c) => (
                           <option key={c} value={c}>
-                            {CATEGORY_META[c][lang]}
+                            {CATEGORY_META[c].en}
                           </option>
                         ))}
                       </select>
@@ -1861,17 +1857,37 @@ export const ItemModal: React.FC<ItemModalProps> = ({
             {/* Footer */}
             <div className="flex items-center justify-between gap-3 pt-3 border-t border-stone-100">
               {!isNew && onDelete ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    onDelete(item.id);
-                    onClose();
-                  }}
-                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium text-rose-600 hover:bg-rose-50"
-                >
-                  <Trash2 className="w-4 h-4" />
-                  Delete
-                </button>
+                confirmDelete ? (
+                  <div className="inline-flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onDelete(item.id);
+                        onClose();
+                      }}
+                      className="inline-flex items-center gap-1 px-3 py-2 rounded-xl text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      Confirm Delete
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setConfirmDelete(false)}
+                      className="px-2.5 py-2 rounded-xl text-xs font-semibold text-stone-500 hover:bg-stone-100"
+                    >
+                      Keep
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setConfirmDelete(true)}
+                    className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium text-rose-600 hover:bg-rose-50"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    Delete
+                  </button>
+                )
               ) : isNew ? (
                 <button
                   type="button"

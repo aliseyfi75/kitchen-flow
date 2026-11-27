@@ -34,11 +34,10 @@ import {
   ShoppingItem,
   StorageZone,
   Store,
-  UILanguage,
   UIMode,
 } from '../types/kitchen';
 import { computeItemForecast } from '../utils/forecasting';
-import { CATEGORY_META, t, ZONE_META } from '../i18n/translations';
+import { CATEGORY_META, UI_LABELS, ZONE_META } from '../i18n/translations';
 import {
   CONTINUOUS_LEVEL_PRESETS,
   formatMeasuredAmount,
@@ -73,7 +72,6 @@ interface KitchenViewProps {
   stores: Store[];
   shoppingList: ShoppingItem[];
   shoppingDay: number;
-  lang: UILanguage;
   uiMode: UIMode;
   eatingMode: EatingMode;
   guestCount: number;
@@ -266,7 +264,6 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
   stores,
   shoppingList,
   shoppingDay,
-  lang,
   uiMode,
   eatingMode,
   guestCount,
@@ -448,17 +445,17 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
 
     const verdictBadge =
       forecast.verdict === 'out'
-        ? { label: t(lang, 'outOfStock'), cls: 'bg-rose-100 text-rose-800 border-rose-200' }
+        ? { label: UI_LABELS.outOfStock, cls: 'bg-rose-100 text-rose-800 border-rose-200' }
         : forecast.verdict === 'buy_this_weekend'
-        ? { label: t(lang, 'buyThisWeekend'), cls: 'bg-amber-100 text-amber-800 border-amber-200' }
+        ? { label: UI_LABELS.buyThisWeekend, cls: 'bg-amber-100 text-amber-800 border-amber-200' }
         : forecast.verdict === 'runs_out_next_week'
         ? {
             label: `Runs out ~${forecast.runOutDayLabel} next wk`,
             cls: 'bg-amber-50 text-amber-900 border-amber-200',
           }
         : forecast.verdict === 'borderline'
-        ? { label: t(lang, 'borderline'), cls: 'bg-sky-50 text-sky-800 border-sky-200' }
-        : { label: t(lang, 'goodNextWeek'), cls: 'bg-emerald-50 text-emerald-800 border-emerald-200' };
+        ? { label: UI_LABELS.borderline, cls: 'bg-sky-50 text-sky-800 border-sky-200' }
+        : { label: UI_LABELS.goodNextWeek, cls: 'bg-emerald-50 text-emerald-800 border-emerald-200' };
 
     const microChips: string[] = [];
     if (nut?.micronutrients.omega3) microChips.push('Omega-3');
@@ -516,7 +513,7 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
             <div className="mt-1 flex items-center flex-wrap gap-x-2 gap-y-1 text-xs text-stone-500">
               <span className="inline-flex items-center gap-1 font-medium text-stone-600">
                 {ZONE_ICONS[item.zone]}
-                {ZONE_META[item.zone][lang]}
+                {ZONE_META[item.zone].en}
               </span>
               <span>•</span>
 
@@ -538,7 +535,7 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
                 >
                   {PRODUCT_CATEGORY_ORDER.map((c) => (
                     <option key={c} value={c}>
-                      {CATEGORY_META[c][lang]}
+                      {CATEGORY_META[c].en}
                     </option>
                   ))}
                 </select>
@@ -550,7 +547,7 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
                   title="Tap to change category"
                 >
                   <CategoryIcon category={item.category} className="w-3.5 h-3.5 text-stone-400" />
-                  <span>{catMeta?.shortEn ?? CATEGORY_META[item.category]?.[lang]}</span>
+                  <span>{catMeta?.shortEn ?? CATEGORY_META[item.category]?.en}</span>
                 </button>
               )}
 
@@ -663,7 +660,7 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
                 <AlertTriangle className="w-3 h-3" />
                 {forecast.daysUntilExpiry <= 0
                   ? 'Check freshness!'
-                  : `${t(lang, 'expiringSoon')} (${forecast.daysUntilExpiry}d)`}
+                  : `${UI_LABELS.expiringSoon} (${forecast.daysUntilExpiry}d)`}
               </span>
             )}
 
@@ -793,7 +790,7 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
                   }
                 >
                   <Trash2 className="w-3.5 h-3.5" />
-                  {t(lang, 'finishedBtn')}
+                  {UI_LABELS.finishedBtn}
                 </button>
               </>
             ) : (
@@ -809,8 +806,8 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
                 >
                   <Minus className="w-3.5 h-3.5" />
                   {effectiveUseAmount === 1
-                    ? `${t(lang, 'usePortion')} 1`
-                    : `${t(lang, 'usePortion')} ${effectiveUseAmount} (${
+                    ? `${UI_LABELS.usePortion} 1`
+                    : `${UI_LABELS.usePortion} ${effectiveUseAmount} (${
                         eatingMode === 'together' ? '2×' : `${servingMultiplier}×`
                       })`}
                 </button>
@@ -837,7 +834,7 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
                   }
                 >
                   <Trash2 className="w-3.5 h-3.5" />
-                  {t(lang, 'finishedBtn')}
+                  {UI_LABELS.finishedBtn}
                 </button>
               </>
             )
@@ -848,7 +845,7 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
               className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-xl bg-stone-900 hover:bg-stone-800 text-white py-2 px-3 text-xs font-semibold transition"
             >
               <RefreshCw className="w-3.5 h-3.5" />
-              {t(lang, 'restockBtn')} ({formatRestockLabel(item)})
+              {UI_LABELS.restockBtn} ({formatRestockLabel(item)})
             </button>
           )}
         </div>
@@ -862,7 +859,7 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
       <div className="rounded-2xl border border-stone-200/90 bg-white px-3.5 py-2.5 shadow-2xs flex flex-wrap items-center justify-between gap-2.5">
         <div className="flex items-center gap-2 text-xs font-semibold text-stone-700">
           <Users className="w-4 h-4 text-teal-700" />
-          <span>{t(lang, 'whosEating')}</span>
+          <span>{UI_LABELS.whosEating}</span>
         </div>
 
         <div className="flex items-center flex-wrap gap-1.5">
@@ -876,7 +873,7 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
             }`}
           >
             <User className="w-3.5 h-3.5" />
-            {t(lang, 'solo')}
+            {UI_LABELS.solo}
           </button>
 
           <button
@@ -889,7 +886,7 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
             }`}
           >
             <Users className="w-3.5 h-3.5" />
-            {t(lang, 'together')}
+            {UI_LABELS.together}
           </button>
 
           <div
@@ -905,7 +902,7 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
               className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold"
             >
               <PartyPopper className="w-3.5 h-3.5" />
-              {t(lang, 'guests')} ({guestCount}×)
+              {UI_LABELS.guests} ({guestCount}×)
             </button>
             {eatingMode === 'guests' && (
               <div className="flex items-center border-l border-white/20 px-1 gap-0.5">
@@ -939,7 +936,7 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
             dir="auto"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder={t(lang, 'searchPlaceholder')}
+            placeholder={UI_LABELS.searchPlaceholder}
             className="w-full rounded-xl border border-stone-200 bg-white pl-10 pr-4 py-2.5 text-sm shadow-2xs focus:outline-none focus:ring-2 focus:ring-teal-500"
           />
         </div>
@@ -951,7 +948,7 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
             className="flex-1 sm:flex-none inline-flex items-center justify-center gap-1.5 rounded-xl bg-white border border-teal-200 hover:bg-teal-50 text-teal-800 px-3.5 py-2.5 text-xs sm:text-sm font-semibold shadow-2xs transition"
           >
             <Receipt className="w-4 h-4" />
-            {t(lang, 'scanReceipt')}
+            {UI_LABELS.scanReceipt}
           </button>
 
           <button
@@ -966,7 +963,7 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
             className="flex-1 sm:flex-none inline-flex items-center justify-center gap-1.5 rounded-xl bg-teal-700 hover:bg-teal-800 text-white px-4 py-2.5 text-xs sm:text-sm font-semibold shadow-xs transition"
           >
             <Plus className="w-4 h-4" />
-            {t(lang, 'addItem')}
+            {UI_LABELS.addItem}
           </button>
         </div>
       </div>
@@ -990,7 +987,7 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
                   }`}
                 >
                   {z !== 'all' && ZONE_ICONS[z]}
-                  <span>{z === 'all' ? t(lang, 'allZones') : ZONE_META[z][lang]}</span>
+                  <span>{z === 'all' ? UI_LABELS.allZones : ZONE_META[z].en}</span>
                   <span
                     className={`px-1.5 py-0.5 rounded-full text-[10px] ${
                       active ? 'bg-white/20 text-white' : 'bg-stone-100 text-stone-500'
@@ -1064,7 +1061,7 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
                     }`}
                   >
                     <CategoryIcon category={cat} className="w-3.5 h-3.5" />
-                    <span>{meta?.shortEn ?? CATEGORY_META[cat]?.[lang] ?? cat}</span>
+                    <span>{meta?.shortEn ?? CATEGORY_META[cat]?.en ?? cat}</span>
                     <span
                       className={`px-1.5 py-0.2 rounded-full text-[10px] font-bold ${
                         active ? 'bg-white/20 text-white' : 'bg-stone-100 text-stone-500'
@@ -1107,7 +1104,7 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
           {groupedByCategory.map(({ category: cat, entries, outCount, urgentCount }) => {
             const isCollapsed = Boolean(collapsedCategories[cat]);
             const catMeta = PRODUCT_CATEGORIES[cat];
-            const catTitle = catMeta?.[lang] ?? CATEGORY_META[cat]?.[lang] ?? cat;
+            const catTitle = catMeta?.en ?? CATEGORY_META[cat]?.en ?? cat;
 
             return (
               <section key={cat} className="space-y-2.5">
@@ -1201,7 +1198,6 @@ export const KitchenView: React.FC<KitchenViewProps> = ({
           initialTab={modalState.initialTab}
           initialCategory={modalState.initialCategory}
           stores={stores}
-          lang={lang}
           onClose={() => setModalState(null)}
           onSave={onSaveItem}
           onDelete={onDeleteItem}

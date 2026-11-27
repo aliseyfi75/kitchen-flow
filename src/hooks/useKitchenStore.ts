@@ -27,11 +27,14 @@ import {
   inferProductDefaultsFromText,
   parseMeasuredQuantity,
 } from '../utils/productCategories';
+import { clearTombstones, mergeKitchenStates, recordTombstones } from '../utils/stateSync';
 
 export interface ToastMessage {
   id: string;
   text: string;
   tone?: 'teal' | 'amber' | 'rose';
+  undoLabel?: string;
+  onUndo?: () => void;
 }
 
 export type SyncStatus = 'local_demo' | 'loading' | 'synced' | 'saving' | 'offline';
@@ -43,7 +46,7 @@ export interface CloudSyncContext {
 
 const CLIENT_INSTANCE_ID = Math.random().toString(36).slice(2, 10);
 
-function mergeRemoteState(remote: Partial<KitchenState>): KitchenState {
+function normalizeRemoteState(remote: Partial<KitchenState>): KitchenState {
   const defaults = createCleanState();
   return {
     ...defaults,
@@ -51,8 +54,26 @@ function mergeRemoteState(remote: Partial<KitchenState>): KitchenState {
     settings: {
       ...defaults.settings,
       ...(remote.settings || {}),
-      language: 'en',
     },
+    syncMeta: remote.syncMeta ?? {},
+  };
+}
+
+function stampRestoredSnapshot(snapshot: KitchenState, restoredIds: string[]): KitchenState {
+  const nowIso = new Date().toISOString();
+  const idSet = new Set(restoredIds);
+  return {
+    ...snapshot,
+    items: snapshot.items.map((i) => (idSet.has(i.id) ? { ...i, updatedAt: nowIso } : i)),
+    stores: snapshot.stores.map((s) => (idSet.has(s.id) ? { ...s, updatedAt: nowIso } : s)),
+    shoppingList: snapshot.shoppingList.map((s) =>
+      idSet.has(s.id) ? { ...s, updatedAt: nowIso } : s
+    ),
+    recipes: snapshot.recipes.map((r) => (idSet.has(r.id) ? { ...r, updatedAt: nowIso } : r)),
+    weeklyPlan: snapshot.weeklyPlan.map((m) =>
+      idSet.has(m.id) ? { ...m, updatedAt: nowIso } : m
+    ),
+    syncMeta: clearTombstones(snapshot.syncMeta, restoredIds),
   };
 }
 
@@ -61,6 +82,7 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
   const stateRef = useRef(state);
   stateRef.current = state;
   const [toast, setToast] = useState<ToastMessage | null>(null);
+  const toastTimerRef = useRef<number | null>(null);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>(
     cloudContext ? 'loading' : 'local_demo'
   );
@@ -70,13 +92,63 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
   const cloudReadyRef = useRef(false);
   const lastCloudUpdatedAtRef = useRef<string>('');
   const pendingOfflinePushRef = useRef(false);
+  const hasUnsavedLocalEditRef = useRef(false);
 
-  const notify = useCallback((text: string, tone: ToastMessage['tone'] = 'teal') => {
-    const id = String(Date.now());
-    setToast({ id, text, tone });
-    window.setTimeout(() => {
-      setToast((curr) => (curr?.id === id ? null : curr));
-    }, 3400);
+  const actorNameRef = useRef(cloudContext?.displayName || '');
+  actorNameRef.current = cloudContext?.displayName || '';
+
+  const resolveActor = useCallback((fallback: string) => {
+    return actorNameRef.current || fallback || 'Household';
+  }, []);
+
+  const dismissToast = useCallback(() => {
+    if (toastTimerRef.current !== null) {
+      window.clearTimeout(toastTimerRef.current);
+      toastTimerRef.current = null;
+    }
+    setToast(null);
+  }, []);
+
+  const notify = useCallback(
+    (
+      text: string,
+      tone: ToastMessage['tone'] = 'teal',
+      undo?: { label?: string; onUndo: () => void }
+    ) => {
+      if (toastTimerRef.current !== null) {
+        window.clearTimeout(toastTimerRef.current);
+        toastTimerRef.current = null;
+      }
+      const id = `${Date.now()}-${Math.random().toString(36).slice(2, 5)}`;
+      setToast({
+        id,
+        text,
+        tone,
+        undoLabel: undo ? undo.label || 'Undo' : undefined,
+        onUndo: undo
+          ? () => {
+              undo.onUndo();
+              dismissToast();
+            }
+          : undefined,
+      });
+      toastTimerRef.current = window.setTimeout(
+        () => {
+          setToast((curr) => (curr?.id === id ? null : curr));
+          toastTimerRef.current = null;
+        },
+        undo ? 5200 : 3400
+      );
+    },
+    [dismissToast]
+  );
+
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current !== null) {
+        window.clearTimeout(toastTimerRef.current);
+      }
+    };
   }, []);
 
   // Always cache locally for instant startup & offline resilience
@@ -84,7 +156,7 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
     kitchenRepo.save(state);
   }, [state]);
 
-  // Initial load + Supabase Realtime + wake-up / reconnect auto-sync
+  // Initial load + Supabase Realtime + wake-up / reconnect auto-sync with entity-level merge
   useEffect(() => {
     if (!cloudContext || !supabase) {
       cloudReadyRef.current = false;
@@ -105,9 +177,19 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
       if (row.updated_at && row.updated_at <= lastCloudUpdatedAtRef.current) return;
 
       lastCloudUpdatedAtRef.current = row.updated_at || new Date().toISOString();
-      skipNextCloudSaveRef.current = true;
-      setState(mergeRemoteState(row.state));
-      setSyncStatus('synced');
+      const normalizedRemote = normalizeRemoteState(row.state);
+
+      if (hasUnsavedLocalEditRef.current || pendingOfflinePushRef.current) {
+        // Merge concurrent local edits with incoming remote state instead of clobbering either side
+        const merged = mergeKitchenStates(stateRef.current, normalizedRemote, {
+          preferRemoteOnTie: true,
+        });
+        setState(merged);
+      } else {
+        skipNextCloudSaveRef.current = true;
+        setState(normalizedRemote);
+        setSyncStatus('synced');
+      }
 
       if (showBanner) {
         const who = row.updated_by?.split(':')[0] || 'Household';
@@ -115,13 +197,13 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
       }
     };
 
-    const pushLocalState = async () => {
+    const pushStateToCloud = async (stateToPush: KitchenState) => {
       if (!supabase) return;
       const nowIso = new Date().toISOString();
       setSyncStatus('saving');
       const { error } = await supabase.from('household_state').upsert({
         household_id: householdId,
-        state: stateRef.current,
+        state: stateToPush,
         updated_at: nowIso,
         updated_by: actorTag,
       });
@@ -131,6 +213,7 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
         setSyncStatus('offline');
       } else {
         pendingOfflinePushRef.current = false;
+        hasUnsavedLocalEditRef.current = false;
         lastCloudUpdatedAtRef.current = nowIso;
         setSyncStatus('synced');
       }
@@ -138,10 +221,7 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
 
     const pullLatestFromCloud = async (showBanner: boolean) => {
       if (!supabase || !active) return;
-      if (pendingOfflinePushRef.current) {
-        await pushLocalState();
-        return;
-      }
+
       const { data, error } = await supabase
         .from('household_state')
         .select('state, updated_at, updated_by')
@@ -153,6 +233,22 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
         setSyncStatus('offline');
         return;
       }
+
+      // If we made offline edits, merge them with latest remote state BEFORE pushing!
+      if (pendingOfflinePushRef.current) {
+        let stateToPush = stateRef.current;
+        if (data?.state) {
+          const normalizedRemote = normalizeRemoteState(data.state as Partial<KitchenState>);
+          stateToPush = mergeKitchenStates(stateRef.current, normalizedRemote, {
+            preferRemoteOnTie: false,
+          });
+          skipNextCloudSaveRef.current = true;
+          setState(stateToPush);
+        }
+        await pushStateToCloud(stateToPush);
+        return;
+      }
+
       if (data?.state) {
         applyRemoteRow(
           data as { state: Partial<KitchenState>; updated_at?: string; updated_by?: string },
@@ -178,10 +274,9 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
       }
 
       if (data?.state) {
-        const merged = mergeRemoteState(data.state as Partial<KitchenState>);
+        const merged = normalizeRemoteState(data.state as Partial<KitchenState>);
         const { cleaned, changed } = stripLegacyDemoData(merged);
         if (changed) {
-          // One-time cleanup of legacy prototype demo data in cloud
           const nowIso = new Date().toISOString();
           await supabase!.from('household_state').upsert({
             household_id: householdId,
@@ -196,7 +291,6 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
         skipNextCloudSaveRef.current = true;
         setState(cleaned);
       } else {
-        // First time ever for this household: initialize clean empty state in cloud
         const nowIso = new Date().toISOString();
         await supabase!.from('household_state').upsert({
           household_id: householdId,
@@ -248,7 +342,7 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
     document.addEventListener('visibilitychange', handleResume);
     window.addEventListener('online', handleOnline);
 
-    // 3. Lightweight 25s fallback poll while active in foreground (safety net if WebSocket sleeps)
+    // 3. Lightweight 25s fallback poll while active in foreground
     const intervalId = window.setInterval(() => {
       if (document.visibilityState === 'visible' && cloudReadyRef.current) {
         pullLatestFromCloud(true);
@@ -273,6 +367,7 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
       return;
     }
 
+    hasUnsavedLocalEditRef.current = true;
     setSyncStatus('saving');
     const actorTag = `${cloudContext.displayName}:${CLIENT_INSTANCE_ID}`;
     const timer = window.setTimeout(async () => {
@@ -288,6 +383,7 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
         setSyncStatus('offline');
       } else {
         pendingOfflinePushRef.current = false;
+        hasUnsavedLocalEditRef.current = false;
         lastCloudUpdatedAtRef.current = nowIso;
         setSyncStatus('synced');
       }
@@ -301,12 +397,14 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
     item: InventoryItem,
     reason: ShoppingReason,
     priority: 'essential' | 'optional' = 'essential',
-    note?: string
-  ): { list: ShoppingItem[]; added: boolean } => {
+    note?: string,
+    nowIso = new Date().toISOString()
+  ): { list: ShoppingItem[]; added: boolean; id: string } => {
     const existing = shoppingList.find((s) => s.inventoryItemId === item.id);
     if (existing) {
       return {
         added: false,
+        id: existing.id,
         list: shoppingList.map((s) =>
           s.id === existing.id
             ? {
@@ -314,6 +412,7 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
                 priority: priority === 'essential' ? 'essential' : s.priority,
                 note: note ?? s.note,
                 checked: false,
+                updatedAt: nowIso,
               }
             : s
         ),
@@ -321,8 +420,9 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
     }
 
     const storeId = getLearnedStoreId(item);
+    const id = `shop-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     const newEntry: ShoppingItem = {
-      id: `shop-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      id,
       inventoryItemId: item.id,
       name: item.name,
       alias: item.alias,
@@ -334,20 +434,29 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
       reason,
       note,
       checked: false,
-      addedAt: new Date().toISOString(),
+      addedAt: nowIso,
+      updatedAt: nowIso,
     };
-    return { added: true, list: [newEntry, ...shoppingList] };
+    return { added: true, id, list: [newEntry, ...shoppingList] };
   };
+
+  const restoreSnapshot = useCallback(
+    (snapshot: KitchenState, restoredIds: string[], message = 'Undone') => {
+      setState(stampRestoredSnapshot(snapshot, restoredIds));
+      notify(message, 'teal');
+    },
+    [notify]
+  );
 
   const usePortion = useCallback(
     (itemId: string, amount = 1) => {
-      const curr = stateRef.current;
-      const target = curr.items.find((i) => i.id === itemId);
+      const snapshot = stateRef.current;
+      const target = snapshot.items.find((i) => i.id === itemId);
       if (!target || target.remainingPortions <= 0) return;
 
       const nextRemaining = Math.max(0, Number((target.remainingPortions - amount).toFixed(2)));
       const storeName =
-        curr.stores.find((s) => s.id === getLearnedStoreId(target))?.name ?? 'Shopping List';
+        snapshot.stores.find((s) => s.id === getLearnedStoreId(target))?.name ?? 'Shopping List';
 
       setState((prev) => {
         const prevTarget = prev.items.find((i) => i.id === itemId);
@@ -368,7 +477,14 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
           avgDaysPerFullPack = ema.avgDaysPerFullPack;
           cycleCount = ema.cycleCount;
           if (prevTarget.autoAddOnEmpty) {
-            nextShopping = ensureOnShoppingList(prev.shoppingList, prevTarget, 'finished', 'essential').list;
+            nextShopping = ensureOnShoppingList(
+              prev.shoppingList,
+              prevTarget,
+              'finished',
+              'essential',
+              undefined,
+              nowIso
+            ).list;
           }
         }
 
@@ -380,6 +496,7 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
                   ...i,
                   remainingPortions: computedRem,
                   lastUsedAt: nowIso,
+                  updatedAt: nowIso,
                   avgDaysPerFullPack,
                   cycleCount,
                 }
@@ -388,37 +505,42 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
           shoppingList: nextShopping,
           events: [
             {
-              id: `ev-${Date.now()}`,
+              id: `ev-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
               itemId,
               type: computedRem === 0 ? 'finished' : 'use_portion',
               deltaPortions: -amount,
               timestamp: nowIso,
-              actor: prev.settings.activeUser,
+              actor: resolveActor(prev.settings.activeUser),
             },
             ...prev.events.slice(0, 199),
           ],
         };
       });
 
+      const undo = {
+        onUndo: () => restoreSnapshot(snapshot, [itemId], `Restored ${target.name}`),
+      };
+
       if (nextRemaining === 0 && target.autoAddOnEmpty) {
-        notify(`${target.name} finished → auto-added to ${storeName}!`, 'amber');
+        notify(`${target.name} finished → auto-added to ${storeName}!`, 'amber', undo);
       } else if (target.trackingMode === 'continuous') {
         const updatedPreview = { ...target, remainingPortions: nextRemaining };
         notify(
           `Logged -${amount} × ${target.portionLabel} of ${target.name} (${formatItemStockSummary(updatedPreview)})`,
-          'teal'
+          'teal',
+          undo
         );
       } else {
-        notify(`Logged -${amount} of ${target.name} (${nextRemaining} left)`, 'teal');
+        notify(`Logged -${amount} of ${target.name} (${nextRemaining} left)`, 'teal', undo);
       }
     },
-    [notify]
+    [notify, resolveActor, restoreSnapshot]
   );
 
   const setContinuousLevel = useCallback(
     (itemId: string, percent: number) => {
-      const curr = stateRef.current;
-      const target = curr.items.find((i) => i.id === itemId);
+      const snapshot = stateRef.current;
+      const target = snapshot.items.find((i) => i.id === itemId);
       if (!target) return;
 
       const clampedPct = Math.max(0, Math.min(100, Math.round(percent)));
@@ -427,7 +549,7 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
           ? 0
           : Math.max(0.01, Number(((target.totalPortions * clampedPct) / 100).toFixed(2)));
       const storeName =
-        curr.stores.find((s) => s.id === getLearnedStoreId(target))?.name ?? 'Shopping List';
+        snapshot.stores.find((s) => s.id === getLearnedStoreId(target))?.name ?? 'Shopping List';
 
       setState((prev) => {
         const prevTarget = prev.items.find((i) => i.id === itemId);
@@ -450,7 +572,14 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
           avgDaysPerFullPack = ema.avgDaysPerFullPack;
           cycleCount = ema.cycleCount;
           if (prevTarget.autoAddOnEmpty) {
-            nextShopping = ensureOnShoppingList(prev.shoppingList, prevTarget, 'finished', 'essential').list;
+            nextShopping = ensureOnShoppingList(
+              prev.shoppingList,
+              prevTarget,
+              'finished',
+              'essential',
+              undefined,
+              nowIso
+            ).list;
           }
         }
 
@@ -462,6 +591,7 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
                   ...i,
                   remainingPortions: computedRem,
                   lastUsedAt: nowIso,
+                  updatedAt: nowIso,
                   avgDaysPerFullPack,
                   cycleCount,
                 }
@@ -470,39 +600,46 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
           shoppingList: nextShopping,
           events: [
             {
-              id: `ev-${Date.now()}`,
+              id: `ev-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
               itemId,
               type: computedRem === 0 ? 'finished' : 'level_adjust',
-              deltaPortions: computedRem - prevTarget.remainingPortions,
+              deltaPortions: Number((computedRem - prevTarget.remainingPortions).toFixed(2)),
               timestamp: nowIso,
-              actor: prev.settings.activeUser,
+              actor: resolveActor(prev.settings.activeUser),
             },
             ...prev.events.slice(0, 199),
           ],
         };
       });
 
+      const undo = {
+        onUndo: () => restoreSnapshot(snapshot, [itemId], `Restored ${target.name} level`),
+      };
+
       if (nextRemaining === 0 && target.autoAddOnEmpty) {
-        notify(`${target.name} marked empty → added to ${storeName}!`, 'amber');
+        notify(`${target.name} marked empty → added to ${storeName}!`, 'amber', undo);
       } else if (nextRemaining === 0) {
-        notify(`${target.name} marked empty`, 'amber');
+        notify(`${target.name} marked empty`, 'amber', undo);
       } else if (target.containerSize && target.containerUnit) {
-        const approx = formatMeasuredAmount((target.containerSize * clampedPct) / 100, target.containerUnit);
-        notify(`${target.name} set to ${clampedPct}% (~${approx} left)`, 'teal');
+        const approx = formatMeasuredAmount(
+          (target.containerSize * clampedPct) / 100,
+          target.containerUnit
+        );
+        notify(`${target.name} set to ${clampedPct}% (~${approx} left)`, 'teal', undo);
       } else {
-        notify(`${target.name} set to ${clampedPct}% (${getLevelWord(clampedPct)})`, 'teal');
+        notify(`${target.name} set to ${clampedPct}% (${getLevelWord(clampedPct)})`, 'teal', undo);
       }
     },
-    [notify]
+    [notify, resolveActor, restoreSnapshot]
   );
 
   const markFinished = useCallback(
     (itemId: string) => {
-      const curr = stateRef.current;
-      const target = curr.items.find((i) => i.id === itemId);
+      const snapshot = stateRef.current;
+      const target = snapshot.items.find((i) => i.id === itemId);
       if (!target) return;
       const storeName =
-        curr.stores.find((s) => s.id === getLearnedStoreId(target))?.name ?? 'Shopping List';
+        snapshot.stores.find((s) => s.id === getLearnedStoreId(target))?.name ?? 'Shopping List';
 
       setState((prev) => {
         const prevTarget = prev.items.find((i) => i.id === itemId);
@@ -514,7 +651,7 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
           prevTarget.cycleCount
         );
         const res = prevTarget.autoAddOnEmpty
-          ? ensureOnShoppingList(prev.shoppingList, prevTarget, 'finished', 'essential')
+          ? ensureOnShoppingList(prev.shoppingList, prevTarget, 'finished', 'essential', undefined, nowIso)
           : { list: prev.shoppingList, added: false };
 
         return {
@@ -525,6 +662,7 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
                   ...i,
                   remainingPortions: 0,
                   lastUsedAt: nowIso,
+                  updatedAt: nowIso,
                   avgDaysPerFullPack: ema.avgDaysPerFullPack,
                   cycleCount: ema.cycleCount,
                 }
@@ -533,30 +671,34 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
           shoppingList: res.list,
           events: [
             {
-              id: `ev-${Date.now()}`,
+              id: `ev-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
               itemId,
               type: 'finished',
               deltaPortions: -prevTarget.remainingPortions,
               timestamp: nowIso,
-              actor: prev.settings.activeUser,
+              actor: resolveActor(prev.settings.activeUser),
             },
             ...prev.events.slice(0, 199),
           ],
         };
       });
+
+      const undo = {
+        onUndo: () => restoreSnapshot(snapshot, [itemId], `Restored ${target.name}`),
+      };
       if (target.autoAddOnEmpty) {
-        notify(`${target.name} finished → added to ${storeName} for next trip!`, 'amber');
+        notify(`${target.name} finished → added to ${storeName}!`, 'amber', undo);
       } else {
-        notify(`${target.name} marked finished`, 'amber');
+        notify(`${target.name} marked finished`, 'amber', undo);
       }
     },
-    [notify]
+    [notify, resolveActor, restoreSnapshot]
   );
 
   const quickRestock = useCallback(
     (itemId: string, storeId?: string, portions?: number) => {
-      const curr = stateRef.current;
-      const target = curr.items.find((i) => i.id === itemId);
+      const snapshot = stateRef.current;
+      const target = snapshot.items.find((i) => i.id === itemId);
       if (!target) return;
 
       setState((prev) => {
@@ -567,6 +709,9 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
         const nowIso = new Date().toISOString();
         const counts = { ...(prevTarget.storePurchaseCounts || {}) };
         counts[usedStoreId] = (counts[usedStoreId] || 0) + 1;
+        const removedShopIds = prev.shoppingList
+          .filter((s) => s.inventoryItemId === itemId)
+          .map((s) => s.id);
 
         return {
           ...prev,
@@ -579,34 +724,46 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
                   defaultStoreId: usedStoreId,
                   storePurchaseCounts: counts,
                   lastRestockedAt: nowIso,
+                  updatedAt: nowIso,
                 }
               : i
           ),
           shoppingList: prev.shoppingList.filter((s) => s.inventoryItemId !== itemId),
+          syncMeta:
+            removedShopIds.length > 0
+              ? recordTombstones(prev.syncMeta, removedShopIds, nowIso)
+              : prev.syncMeta,
           events: [
             {
-              id: `ev-${Date.now()}`,
+              id: `ev-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
               itemId,
               type: 'restock',
               deltaPortions: restockQty,
               storeId: usedStoreId,
               timestamp: nowIso,
-              actor: prev.settings.activeUser,
+              actor: resolveActor(prev.settings.activeUser),
             },
             ...prev.events.slice(0, 199),
           ],
         };
       });
-      notify(`Restocked ${target.name} (${formatRestockLabel(target)})`, 'teal');
+      notify(`Restocked ${target.name} (${formatRestockLabel(target)})`, 'teal', {
+        onUndo: () => restoreSnapshot(snapshot, [itemId], `Undid restock of ${target.name}`),
+      });
     },
-    [notify]
+    [notify, resolveActor, restoreSnapshot]
   );
 
   const saveItem = useCallback(
     (item: InventoryItem, isNew: boolean) => {
+      const nowIso = new Date().toISOString();
+      const stamped: InventoryItem = { ...item, updatedAt: nowIso };
       setState((prev) => ({
         ...prev,
-        items: isNew ? [item, ...prev.items] : prev.items.map((i) => (i.id === item.id ? item : i)),
+        items: isNew
+          ? [stamped, ...prev.items]
+          : prev.items.map((i) => (i.id === stamped.id ? stamped : i)),
+        syncMeta: clearTombstones(prev.syncMeta, [stamped.id]),
       }));
       notify(isNew ? `Added ${item.name} to ${item.zone}` : `Updated ${item.name}`, 'teal');
     },
@@ -615,14 +772,30 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
 
   const deleteItem = useCallback(
     (itemId: string) => {
+      const snapshot = stateRef.current;
+      const target = snapshot.items.find((i) => i.id === itemId);
+      const removedShopIds = snapshot.shoppingList
+        .filter((s) => s.inventoryItemId === itemId)
+        .map((s) => s.id);
+      const nowIso = new Date().toISOString();
+
       setState((prev) => ({
         ...prev,
         items: prev.items.filter((i) => i.id !== itemId),
         shoppingList: prev.shoppingList.filter((s) => s.inventoryItemId !== itemId),
+        syncMeta: recordTombstones(prev.syncMeta, [itemId, ...removedShopIds], nowIso),
       }));
-      notify('Removed item from kitchen', 'rose');
+
+      notify(`Removed ${target?.name ?? 'item'} from kitchen`, 'rose', {
+        onUndo: () =>
+          restoreSnapshot(
+            snapshot,
+            [itemId, ...removedShopIds],
+            `Restored ${target?.name ?? 'item'}`
+          ),
+      });
     },
-    [notify]
+    [notify, restoreSnapshot]
   );
 
   const updateItemLearning = useCallback(
@@ -635,6 +808,7 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
       if (!target) return;
 
       setState((prev) => {
+        const nowIso = new Date().toISOString();
         let nextShopping = prev.shoppingList;
         const nextItems = prev.items.map((item) => {
           if (item.id !== itemId) return item;
@@ -656,9 +830,10 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
               ...(item.storePurchaseCounts || {}),
               [patch.storeId]: maxCount + 1,
             };
-            // Keep any active unchecked shopping entry in sync with the updated preferred store
             nextShopping = nextShopping.map((s) =>
-              s.inventoryItemId === itemId && !s.checked ? { ...s, storeId: patch.storeId! } : s
+              s.inventoryItemId === itemId && !s.checked
+                ? { ...s, storeId: patch.storeId!, updatedAt: nowIso }
+                : s
             );
           }
 
@@ -667,6 +842,7 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
             avgDaysPerFullPack: avgDays,
             defaultStoreId,
             storePurchaseCounts,
+            updatedAt: nowIso,
           };
         });
 
@@ -696,6 +872,7 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
     }
 
     setState((prev) => {
+      const nowIso = new Date().toISOString();
       let nextList = [...prev.shoppingList];
       for (const item of prev.items) {
         const fc = computeItemForecast(item, prev.settings.shoppingDay);
@@ -715,7 +892,8 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
             item,
             reason,
             'essential',
-            fc.forecastDescription
+            fc.forecastDescription,
+            nowIso
           );
           nextList = res.list;
         }
@@ -764,6 +942,7 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
 
   const addShoppingItem = useCallback(
     (entry: Omit<ShoppingItem, 'id' | 'addedAt' | 'checked'>) => {
+      const nowIso = new Date().toISOString();
       setState((prev) => ({
         ...prev,
         shoppingList: [
@@ -771,7 +950,8 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
             ...entry,
             id: `shop-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
             checked: false,
-            addedAt: new Date().toISOString(),
+            addedAt: nowIso,
+            updatedAt: nowIso,
           },
           ...prev.shoppingList,
         ],
@@ -782,25 +962,43 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
   );
 
   const toggleShoppingChecked = useCallback((id: string) => {
+    const nowIso = new Date().toISOString();
     setState((prev) => ({
       ...prev,
-      shoppingList: prev.shoppingList.map((s) => (s.id === id ? { ...s, checked: !s.checked } : s)),
+      shoppingList: prev.shoppingList.map((s) =>
+        s.id === id ? { ...s, checked: !s.checked, updatedAt: nowIso } : s
+      ),
     }));
   }, []);
 
   const updateShoppingItem = useCallback((id: string, patch: Partial<ShoppingItem>) => {
+    const nowIso = new Date().toISOString();
     setState((prev) => ({
       ...prev,
-      shoppingList: prev.shoppingList.map((s) => (s.id === id ? { ...s, ...patch } : s)),
+      shoppingList: prev.shoppingList.map((s) =>
+        s.id === id ? { ...s, ...patch, updatedAt: nowIso } : s
+      ),
     }));
   }, []);
 
-  const removeShoppingItem = useCallback((id: string) => {
-    setState((prev) => ({
-      ...prev,
-      shoppingList: prev.shoppingList.filter((s) => s.id !== id),
-    }));
-  }, []);
+  const removeShoppingItem = useCallback(
+    (id: string) => {
+      const snapshot = stateRef.current;
+      const target = snapshot.shoppingList.find((s) => s.id === id);
+      const nowIso = new Date().toISOString();
+
+      setState((prev) => ({
+        ...prev,
+        shoppingList: prev.shoppingList.filter((s) => s.id !== id),
+        syncMeta: recordTombstones(prev.syncMeta, [id], nowIso),
+      }));
+
+      notify(`Removed ${target?.name ?? 'item'} from shopping list`, 'amber', {
+        onUndo: () => restoreSnapshot(snapshot, [id], `Restored ${target?.name ?? 'item'}`),
+      });
+    },
+    [notify, restoreSnapshot]
+  );
 
   const completeShoppingTrip = useCallback(
     (
@@ -815,6 +1013,8 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
         const nowIso = new Date().toISOString();
         let nextItems = [...prev.items];
         const newEvents = [...prev.events];
+        const actor = resolveActor(prev.settings.activeUser);
+        const removedShopIds = checkedItems.map((s) => s.id);
 
         for (const s of checkedItems) {
           const ov = overrides[s.id] || {
@@ -839,6 +1039,7 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
                 defaultStoreId: ov.storeId,
                 storePurchaseCounts: counts,
                 lastRestockedAt: nowIso,
+                updatedAt: nowIso,
               };
             });
             newEvents.unshift({
@@ -848,7 +1049,7 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
               deltaPortions: ov.targetPortions,
               storeId: ov.storeId,
               timestamp: nowIso,
-              actor: prev.settings.activeUser,
+              actor,
             });
           } else {
             const newId = `item-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -885,7 +1086,17 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
               avgDaysPerFullPack: profile.defaultAvgDays,
               cycleCount: 0,
               lastRestockedAt: nowIso,
+              updatedAt: nowIso,
               autoAddOnEmpty: profile.defaultAutoAdd,
+            });
+            newEvents.unshift({
+              id: `ev-${Date.now()}-${newId}`,
+              itemId: newId,
+              type: 'restock',
+              deltaPortions: totalQty,
+              storeId: ov.storeId,
+              timestamp: nowIso,
+              actor,
             });
           }
         }
@@ -894,6 +1105,7 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
           ...prev,
           items: nextItems,
           shoppingList: prev.shoppingList.filter((s) => !s.checked),
+          syncMeta: recordTombstones(prev.syncMeta, removedShopIds, nowIso),
           events: newEvents.slice(0, 200),
         };
       });
@@ -902,14 +1114,15 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
         notify(`Restocked ${restockedCount} item(s) & updated learned store preferences!`, 'teal');
       }
     },
-    [notify]
+    [notify, resolveActor]
   );
 
   const addStore = useCallback(
     (store: Omit<Store, 'id'>) => {
+      const nowIso = new Date().toISOString();
       setState((prev) => ({
         ...prev,
-        stores: [...prev.stores, { ...store, id: `store-${Date.now()}` }],
+        stores: [...prev.stores, { ...store, id: `store-${Date.now()}`, updatedAt: nowIso }],
       }));
       notify(`Added store: ${store.name}`, 'teal');
     },
@@ -917,14 +1130,20 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
   );
 
   const updateStore = useCallback((storeId: string, patch: Partial<Omit<Store, 'id'>>) => {
+    const nowIso = new Date().toISOString();
     setState((prev) => ({
       ...prev,
-      stores: prev.stores.map((s) => (s.id === storeId ? { ...s, ...patch } : s)),
+      stores: prev.stores.map((s) => (s.id === storeId ? { ...s, ...patch, updatedAt: nowIso } : s)),
     }));
   }, []);
 
   const deleteStore = useCallback(
     (storeId: string) => {
+      const snapshot = stateRef.current;
+      if (snapshot.stores.length <= 1) return;
+      const target = snapshot.stores.find((s) => s.id === storeId);
+      const nowIso = new Date().toISOString();
+
       setState((prev) => {
         if (prev.stores.length <= 1) return prev;
         const fallbackId = prev.stores.find((s) => s.id !== storeId)!.id;
@@ -932,16 +1151,20 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
           ...prev,
           stores: prev.stores.filter((s) => s.id !== storeId),
           items: prev.items.map((i) =>
-            i.defaultStoreId === storeId ? { ...i, defaultStoreId: fallbackId } : i
+            i.defaultStoreId === storeId ? { ...i, defaultStoreId: fallbackId, updatedAt: nowIso } : i
           ),
           shoppingList: prev.shoppingList.map((s) =>
-            s.storeId === storeId ? { ...s, storeId: fallbackId } : s
+            s.storeId === storeId ? { ...s, storeId: fallbackId, updatedAt: nowIso } : s
           ),
+          syncMeta: recordTombstones(prev.syncMeta, [storeId], nowIso),
         };
       });
-      notify('Store removed', 'amber');
+
+      notify(`Removed store: ${target?.name ?? 'Store'}`, 'amber', {
+        onUndo: () => restoreSnapshot(snapshot, [storeId], `Restored ${target?.name ?? 'store'}`),
+      });
     },
-    [notify]
+    [notify, restoreSnapshot]
   );
 
   const addRecipeWithNewIngredients = useCallback(
@@ -949,7 +1172,9 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
       recipe: Omit<MealRecipe, 'id'> & { id?: string },
       newInventoryItems: InventoryItem[] = []
     ) => {
+      const nowIso = new Date().toISOString();
       const assignedId = recipe.id || `rec-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`;
+      const stampedItems = newInventoryItems.map((it) => ({ ...it, updatedAt: nowIso }));
       setState((prev) => {
         const existingCuisines = prev.settings.cuisines || [];
         const hasCuisine = existingCuisines.some(
@@ -957,11 +1182,14 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
         );
         return {
           ...prev,
-          items: newInventoryItems.length > 0 ? [...newInventoryItems, ...prev.items] : prev.items,
-          recipes: [{ ...recipe, id: assignedId }, ...prev.recipes],
+          items: stampedItems.length > 0 ? [...stampedItems, ...prev.items] : prev.items,
+          recipes: [{ ...recipe, id: assignedId, updatedAt: nowIso }, ...prev.recipes],
           settings: hasCuisine
             ? prev.settings
             : { ...prev.settings, cuisines: [...existingCuisines, recipe.cuisine] },
+          syncMeta: hasCuisine
+            ? prev.syncMeta
+            : { ...prev.syncMeta, settingsUpdatedAt: nowIso },
         };
       });
       notify(
@@ -979,12 +1207,14 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
     (cuisineName: string) => {
       const clean = cuisineName.trim();
       if (!clean) return;
+      const nowIso = new Date().toISOString();
       setState((prev) => {
         const existing = prev.settings.cuisines || [];
         if (existing.some((c) => c.toLowerCase() === clean.toLowerCase())) return prev;
         return {
           ...prev,
           settings: { ...prev.settings, cuisines: [...existing, clean] },
+          syncMeta: { ...prev.syncMeta, settingsUpdatedAt: nowIso },
         };
       });
       notify(`Added cuisine: ${clean}`, 'teal');
@@ -994,41 +1224,65 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
 
   const cookRecipeDirect = useCallback(
     (recipeId: string, servings: number) => {
-      const curr = stateRef.current;
-      const recipe = curr.recipes.find((r) => r.id === recipeId);
+      const snapshot = stateRef.current;
+      const recipe = snapshot.recipes.find((r) => r.id === recipeId);
       if (!recipe) return;
       const mult = Math.max(1, servings);
+      const touchedIds: string[] = [];
 
       setState((prev) => {
         const rec = prev.recipes.find((r) => r.id === recipeId);
         if (!rec) return prev;
         const nowIso = new Date().toISOString();
+        const actor = resolveActor(prev.settings.activeUser);
         let nextShopping = prev.shoppingList;
         const newEvents = [...prev.events];
 
         const nextItems = prev.items.map((item) => {
           const ing = rec.ingredients.find((x) => x.itemId === item.id);
           if (!ing) return item;
+          touchedIds.push(item.id);
           const deducted = Number((ing.portionsNeeded * mult).toFixed(2));
           const nextRem = Math.max(0, Number((item.remainingPortions - deducted).toFixed(2)));
+          let avgDaysPerFullPack = item.avgDaysPerFullPack;
+          let cycleCount = item.cycleCount;
+
+          if (nextRem === 0 && item.remainingPortions > 0) {
+            const ema = updateEmaCycleDays(
+              item.avgDaysPerFullPack,
+              item.lastRestockedAt,
+              item.cycleCount
+            );
+            avgDaysPerFullPack = ema.avgDaysPerFullPack;
+            cycleCount = ema.cycleCount;
+            if (item.autoAddOnEmpty) {
+              nextShopping = ensureOnShoppingList(
+                nextShopping,
+                item,
+                'finished',
+                'essential',
+                'Ran out while cooking',
+                nowIso
+              ).list;
+            }
+          }
+
           newEvents.unshift({
             id: `ev-${Date.now()}-${item.id}`,
             itemId: item.id,
             type: nextRem === 0 ? 'finished' : 'use_portion',
             deltaPortions: -deducted,
             timestamp: nowIso,
-            actor: prev.settings.activeUser,
+            actor,
           });
-          if (nextRem === 0 && item.autoAddOnEmpty) {
-            nextShopping = ensureOnShoppingList(
-              nextShopping,
-              item,
-              'finished',
-              'essential',
-              'Ran out while cooking'
-            ).list;
-          }
-          return { ...item, remainingPortions: nextRem, lastUsedAt: nowIso };
+          return {
+            ...item,
+            remainingPortions: nextRem,
+            lastUsedAt: nowIso,
+            updatedAt: nowIso,
+            avgDaysPerFullPack,
+            cycleCount,
+          };
         });
 
         return {
@@ -1039,83 +1293,172 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
         };
       });
 
-      notify(`Cooked "${recipe.name}" (${mult}×) & deducted exact ingredients from Kitchen!`, 'teal');
+      notify(`Cooked "${recipe.name}" (${mult}×) & deducted ingredients from Kitchen!`, 'teal', {
+        onUndo: () => restoreSnapshot(snapshot, touchedIds, `Undid cooking "${recipe.name}"`),
+      });
     },
-    [notify]
+    [notify, resolveActor, restoreSnapshot]
   );
 
   const toggleFavoriteRecipe = useCallback((recipeId: string) => {
+    const nowIso = new Date().toISOString();
     setState((prev) => ({
       ...prev,
       recipes: prev.recipes.map((r) =>
-        r.id === recipeId ? { ...r, isFavorite: !r.isFavorite } : r
+        r.id === recipeId ? { ...r, isFavorite: !r.isFavorite, updatedAt: nowIso } : r
       ),
     }));
   }, []);
 
   const setWeeklyPlan = useCallback((plan: PlannedMeal[]) => {
-    setState((prev) => ({ ...prev, weeklyPlan: plan }));
+    const nowIso = new Date().toISOString();
+    setState((prev) => {
+      const newIds = new Set(plan.map((m) => m.id));
+      const removedIds = prev.weeklyPlan.filter((m) => !newIds.has(m.id)).map((m) => m.id);
+      return {
+        ...prev,
+        weeklyPlan: plan.map((m) => ({ ...m, updatedAt: nowIso })),
+        syncMeta:
+          removedIds.length > 0
+            ? recordTombstones(prev.syncMeta, removedIds, nowIso)
+            : prev.syncMeta,
+      };
+    });
   }, []);
 
   const updatePlannedMealServings = useCallback((plannedMealId: string, servings: number) => {
+    const nowIso = new Date().toISOString();
     setState((prev) => ({
       ...prev,
       weeklyPlan: prev.weeklyPlan.map((m) =>
-        m.id === plannedMealId ? { ...m, servings: Math.max(1, Math.min(12, servings)) } : m
+        m.id === plannedMealId
+          ? { ...m, servings: Math.max(1, Math.min(12, servings)), updatedAt: nowIso }
+          : m
       ),
     }));
   }, []);
 
   const markMealCooked = useCallback(
     (plannedMealId: string, deductFromInventory: boolean) => {
-      const curr = stateRef.current;
-      const targetMeal = curr.weeklyPlan.find((m) => m.id === plannedMealId);
+      const snapshot = stateRef.current;
+      const targetMeal = snapshot.weeklyPlan.find((m) => m.id === plannedMealId);
       if (!targetMeal) return;
-      const targetRecipe = curr.recipes.find((r) => r.id === targetMeal.recipeId);
+      const targetRecipe = snapshot.recipes.find((r) => r.id === targetMeal.recipeId);
       const cookedTitle = targetRecipe?.name || 'Meal';
       const servingCount = targetMeal.servings || 1;
+      const wasCooked = targetMeal.cooked;
 
       setState((prev) => {
         const meal = prev.weeklyPlan.find((m) => m.id === plannedMealId);
         if (!meal) return prev;
         const recipe = prev.recipes.find((r) => r.id === meal.recipeId);
         const mult = meal.servings || 1;
+        const nowIso = new Date().toISOString();
+        const actor = resolveActor(prev.settings.activeUser);
 
         let nextItems = prev.items;
         let nextShopping = prev.shoppingList;
-        const nowIso = new Date().toISOString();
+        const newEvents = [...prev.events];
+        let nextDeductedItems: { itemId: string; amount: number }[] | undefined = meal.deductedItems;
 
-        if (deductFromInventory && recipe && !meal.cooked) {
+        if (!meal.cooked && deductFromInventory && recipe) {
+          // Marking cooked: deduct ingredients, record exact amounts, log UsageEvents & EMA
+          const applied: { itemId: string; amount: number }[] = [];
           nextItems = prev.items.map((item) => {
             const ing = recipe.ingredients.find((x) => x.itemId === item.id);
             if (!ing) return item;
-            const totalNeeded = Number((ing.portionsNeeded * mult).toFixed(1));
-            const nextRem = Math.max(0, Number((item.remainingPortions - totalNeeded).toFixed(1)));
-            if (nextRem === 0 && item.autoAddOnEmpty) {
-              const res = ensureOnShoppingList(nextShopping, item, 'finished', 'essential');
-              nextShopping = res.list;
+            const totalNeeded = Number((ing.portionsNeeded * mult).toFixed(2));
+            const actualDeducted = Number(
+              Math.min(item.remainingPortions, totalNeeded).toFixed(2)
+            );
+            const nextRem = Math.max(0, Number((item.remainingPortions - totalNeeded).toFixed(2)));
+            if (actualDeducted > 0) {
+              applied.push({ itemId: item.id, amount: actualDeducted });
             }
-            return { ...item, remainingPortions: nextRem, lastUsedAt: nowIso };
+
+            let avgDaysPerFullPack = item.avgDaysPerFullPack;
+            let cycleCount = item.cycleCount;
+            if (nextRem === 0 && item.remainingPortions > 0) {
+              const ema = updateEmaCycleDays(
+                item.avgDaysPerFullPack,
+                item.lastRestockedAt,
+                item.cycleCount
+              );
+              avgDaysPerFullPack = ema.avgDaysPerFullPack;
+              cycleCount = ema.cycleCount;
+              if (item.autoAddOnEmpty) {
+                nextShopping = ensureOnShoppingList(
+                  nextShopping,
+                  item,
+                  'finished',
+                  'essential',
+                  'Ran out while cooking',
+                  nowIso
+                ).list;
+              }
+            }
+
+            newEvents.unshift({
+              id: `ev-${Date.now()}-${item.id}`,
+              itemId: item.id,
+              type: nextRem === 0 ? 'finished' : 'use_portion',
+              deltaPortions: -actualDeducted,
+              timestamp: nowIso,
+              actor,
+            });
+
+            return {
+              ...item,
+              remainingPortions: nextRem,
+              lastUsedAt: nowIso,
+              updatedAt: nowIso,
+              avgDaysPerFullPack,
+              cycleCount,
+            };
           });
+          nextDeductedItems = applied;
+        } else if (meal.cooked) {
+          // Un-marking cooked: restore exact previously deducted amounts so re-checking never double-deducts
+          const toRestore = meal.deductedItems || [];
+          if (toRestore.length > 0) {
+            const restoreMap = new Map(toRestore.map((d) => [d.itemId, d.amount]));
+            nextItems = prev.items.map((item) => {
+              const amt = restoreMap.get(item.id);
+              if (!amt) return item;
+              return {
+                ...item,
+                remainingPortions: Number((item.remainingPortions + amt).toFixed(2)),
+                updatedAt: nowIso,
+              };
+            });
+          }
+          nextDeductedItems = undefined;
         }
 
         return {
           ...prev,
           items: nextItems,
           shoppingList: nextShopping,
+          events: newEvents.slice(0, 200),
           weeklyPlan: prev.weeklyPlan.map((m) =>
-            m.id === plannedMealId ? { ...m, cooked: !m.cooked } : m
+            m.id === plannedMealId
+              ? { ...m, cooked: !m.cooked, deductedItems: nextDeductedItems, updatedAt: nowIso }
+              : m
           ),
         };
       });
-      notify(
-        deductFromInventory
-          ? `Cooked "${cookedTitle}" (${servingCount}× servings) & deducted from kitchen!`
-          : `Updated "${cookedTitle}" status`,
-        'teal'
-      );
+
+      if (!wasCooked && deductFromInventory) {
+        notify(`Cooked "${cookedTitle}" (${servingCount}×) & deducted from kitchen!`, 'teal', {
+          onUndo: () => restoreSnapshot(snapshot, [plannedMealId], `Undid cooking "${cookedTitle}"`),
+        });
+      } else if (wasCooked) {
+        notify(`Unmarked "${cookedTitle}" & restored deducted ingredients`, 'amber');
+      } else {
+        notify(`Updated "${cookedTitle}" status`, 'teal');
+      }
     },
-    [notify]
+    [notify, resolveActor, restoreSnapshot]
   );
 
   const applyReceiptItems = useCallback(
@@ -1126,6 +1469,7 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
 
       setState((prev) => {
         const nowIso = new Date().toISOString();
+        const actor = resolveActor(prev.settings.activeUser);
         let nextItems = [...prev.items];
         const matchedIds = new Set<string>();
         const newEvents = [...prev.events];
@@ -1148,6 +1492,7 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
                 defaultStoreId: storeId,
                 storePurchaseCounts: counts,
                 lastRestockedAt: nowIso,
+                updatedAt: nowIso,
               };
             });
             newEvents.unshift({
@@ -1157,7 +1502,7 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
               deltaPortions: line.portionsToAdd,
               storeId,
               timestamp: nowIso,
-              actor: prev.settings.activeUser,
+              actor,
             });
           } else {
             const newId = `item-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -1196,6 +1541,7 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
               avgDaysPerFullPack: profile.defaultAvgDays,
               cycleCount: 0,
               lastRestockedAt: nowIso,
+              updatedAt: nowIso,
               autoAddOnEmpty: profile.defaultAutoAdd,
             });
             newEvents.unshift({
@@ -1205,36 +1551,44 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
               deltaPortions: totalQty,
               storeId,
               timestamp: nowIso,
-              actor: prev.settings.activeUser,
+              actor,
             });
           }
         }
 
-        // Clear any matching items from shopping list
         const parsedNames = new Set(parsedItems.map((p) => p.name.toLowerCase()));
+        const removedShopIds: string[] = [];
         const nextShopping = prev.shoppingList.filter((s) => {
-          if (s.inventoryItemId && matchedIds.has(s.inventoryItemId)) return false;
-          if (parsedNames.has(s.name.toLowerCase())) return false;
-          return true;
+          const shouldClear =
+            (s.inventoryItemId && matchedIds.has(s.inventoryItemId)) ||
+            parsedNames.has(s.name.toLowerCase());
+          if (shouldClear) removedShopIds.push(s.id);
+          return !shouldClear;
         });
 
         return {
           ...prev,
           items: nextItems,
           shoppingList: nextShopping,
+          syncMeta:
+            removedShopIds.length > 0
+              ? recordTombstones(prev.syncMeta, removedShopIds, nowIso)
+              : prev.syncMeta,
           events: newEvents.slice(0, 200),
         };
       });
 
       notify(`Receipt scanned! Restocked ${parsedItems.length} item(s) from ${storeName}.`, 'teal');
     },
-    [notify]
+    [notify, resolveActor]
   );
 
   const updateSettings = useCallback((patch: Partial<HouseholdSettings>) => {
+    const nowIso = new Date().toISOString();
     setState((prev) => ({
       ...prev,
       settings: { ...prev.settings, ...patch },
+      syncMeta: { ...prev.syncMeta, settingsUpdatedAt: nowIso },
     }));
   }, []);
 
@@ -1267,7 +1621,9 @@ export function useKitchenStore(cloudContext?: CloudSyncContext | null) {
     setWeeklyPlan,
     updatePlannedMealServings,
     markMealCooked,
+    applyReceiptItemsRaw: applyReceiptItems,
     updateSettings,
     notify,
+    dismissToast,
   };
 }

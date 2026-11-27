@@ -15,11 +15,10 @@ import {
   ShoppingItem,
   StorageZone,
   Store,
-  UILanguage,
   UIMode,
 } from '../types/kitchen';
 import { computeItemForecast, formatShoppingDayName } from '../utils/forecasting';
-import { t, ZONE_META } from '../i18n/translations';
+import { UI_LABELS, ZONE_META } from '../i18n/translations';
 import {
   formatItemStockSummary,
   formatRestockLabel,
@@ -32,7 +31,6 @@ interface ShoppingViewProps {
   shoppingList: ShoppingItem[];
   shoppingDay: number;
   forecastHorizonDays: number;
-  lang: UILanguage;
   uiMode: UIMode;
   onSyncForecast: () => void;
   onAddShoppingItem: (entry: Omit<ShoppingItem, 'id' | 'addedAt' | 'checked'>) => void;
@@ -44,25 +42,22 @@ interface ShoppingViewProps {
   ) => void;
 }
 
-const REASON_LABELS: Record<ShoppingItem['reason'], { en: string; fa: string; cls: string }> = {
-  finished: { en: 'Finished / Out', fa: 'تمام شد', cls: 'bg-rose-50 text-rose-700 border-rose-200' },
+const REASON_LABELS: Record<ShoppingItem['reason'], { label: string; cls: string }> = {
+  finished: { label: 'Finished / Out', cls: 'bg-rose-50 text-rose-700 border-rose-200' },
   forecast_weekend: {
-    en: 'Runs Out by Weekend',
-    fa: 'اتمام تا آخر هفته',
+    label: 'Runs Out by Weekend',
     cls: 'bg-amber-50 text-amber-800 border-amber-200',
   },
   forecast_midweek: {
-    en: 'Runs Out Mid-Week Next Wk',
-    fa: 'اتمام وسط هفته بعد',
+    label: 'Runs Out Mid-Week Next Wk',
     cls: 'bg-orange-50 text-orange-800 border-orange-200',
   },
   manual_from_kitchen: {
-    en: 'Manual Add (Still Have Some)',
-    fa: 'اضافه‌شده دستی (موجودی داریم)',
+    label: 'Manual Add (Still Have Some)',
     cls: 'bg-sky-50 text-sky-800 border-sky-200',
   },
-  meal_plan: { en: 'For Meal Plan', fa: 'برنامه غذایی', cls: 'bg-indigo-50 text-indigo-700 border-indigo-200' },
-  manual: { en: 'Added Manually', fa: 'دستی', cls: 'bg-stone-100 text-stone-600 border-stone-200' },
+  meal_plan: { label: 'For Meal Plan', cls: 'bg-indigo-50 text-indigo-700 border-indigo-200' },
+  manual: { label: 'Added Manually', cls: 'bg-stone-100 text-stone-600 border-stone-200' },
 };
 
 export const ShoppingView: React.FC<ShoppingViewProps> = ({
@@ -71,7 +66,6 @@ export const ShoppingView: React.FC<ShoppingViewProps> = ({
   shoppingList,
   shoppingDay,
   forecastHorizonDays,
-  lang,
   uiMode,
   onSyncForecast,
   onAddShoppingItem,
@@ -129,22 +123,22 @@ export const ShoppingView: React.FC<ShoppingViewProps> = ({
     setShowRestockModal(true);
   };
 
-  const shoppingDayName = formatShoppingDayName(shoppingDay, lang);
+  const shoppingDayName = formatShoppingDayName(shoppingDay);
 
   return (
     <div className="space-y-5">
-      {/* Weekend Trip Recommendation Hero — Simplified (no Scan Receipt / Add Item here) */}
+      {/* Weekend Trip Recommendation Hero */}
       <div className="rounded-3xl bg-gradient-to-br from-teal-800 via-teal-700 to-emerald-700 text-white p-5 sm:p-6 shadow-md">
         <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
           <div className="space-y-2">
             <div className="inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-teal-100 bg-white/10 px-2.5 py-1 rounded-full">
               <ShoppingBag className="w-3.5 h-3.5" />
-              {t(lang, 'weekendTripTitle')} • {shoppingDayName}
+              {UI_LABELS.weekendTripTitle} • {shoppingDayName}
             </div>
 
             {essentialStores.length > 0 ? (
               <h2 className="text-xl sm:text-2xl font-bold leading-snug">
-                {lang === 'fa' ? 'این آخر هفته باید برید: ' : 'This weekend, visit: '}
+                This weekend, visit:{' '}
                 {essentialStores.map((g, idx) => (
                   <span key={g.store.id}>
                     {idx > 0 ? ' & ' : ''}
@@ -159,7 +153,7 @@ export const ShoppingView: React.FC<ShoppingViewProps> = ({
               </h2>
             ) : (
               <h2 className="text-xl sm:text-2xl font-bold leading-snug">
-                {t(lang, 'noTripNeeded')}
+                {UI_LABELS.noTripNeeded}
               </h2>
             )}
 
@@ -181,7 +175,7 @@ export const ShoppingView: React.FC<ShoppingViewProps> = ({
               className="inline-flex items-center gap-1.5 rounded-xl bg-white text-teal-900 hover:bg-teal-50 px-4 py-2.5 text-xs font-bold shadow-xs transition"
             >
               <Sparkles className="w-4 h-4" />
-              {t(lang, 'addSmartSuggestions')}
+              {UI_LABELS.addSmartSuggestions}
             </button>
           </div>
         </div>
@@ -255,7 +249,7 @@ export const ShoppingView: React.FC<ShoppingViewProps> = ({
             className="inline-flex items-center gap-1.5 rounded-xl bg-teal-500 hover:bg-teal-400 text-stone-950 px-4 py-2 text-xs font-bold transition"
           >
             <PackageCheck className="w-4 h-4" />
-            {t(lang, 'completeTrip')}
+            {UI_LABELS.completeTrip}
           </button>
         </div>
       )}
@@ -374,7 +368,7 @@ export const ShoppingView: React.FC<ShoppingViewProps> = ({
                             <span
                               className={`px-1.5 py-0.5 rounded border font-medium ${reasonMeta.cls}`}
                             >
-                              {reasonMeta[lang]}
+                              {reasonMeta.label}
                             </span>
                           </div>
                           {helperNote && (
@@ -402,7 +396,7 @@ export const ShoppingView: React.FC<ShoppingViewProps> = ({
                               }`}
                               title="Toggle Essential / Optional"
                             >
-                              {s.priority === 'essential' ? t(lang, 'essential') : t(lang, 'optional')}
+                              {s.priority === 'essential' ? UI_LABELS.essential : UI_LABELS.optional}
                             </button>
 
                             <select
@@ -549,7 +543,7 @@ export const ShoppingView: React.FC<ShoppingViewProps> = ({
                         >
                           {(['fridge', 'freezer', 'pantry'] as StorageZone[]).map((z) => (
                             <option key={z} value={z}>
-                              {ZONE_META[z][lang]}
+                              {ZONE_META[z].en}
                             </option>
                           ))}
                         </select>
